@@ -246,6 +246,16 @@ details summary{cursor:pointer;font-weight:800;color:var(--lilac);font-size:13px
   .setup .nums,.calc{grid-template-columns:repeat(2,1fr)}
 }
 
+/* guide + help */
+.qm{width:22px;height:22px;border-radius:50%;border:1px solid var(--line2);background:rgba(223,150,239,.15);color:var(--lilac);font-weight:800;font-size:12px;cursor:pointer;display:inline-grid;place-items:center;padding:0;flex:none;letter-spacing:0;font-family:var(--sans)}
+.sheet{position:fixed;z-index:55;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom));width:min(520px,calc(100vw - 24px));background:rgba(22,18,40,.97);border:1.5px solid var(--lilac);border-radius:20px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.7),0 0 30px rgba(195,112,246,.35);animation:tin .25s ease;max-height:62vh;overflow-y:auto}
+.sheet h3{font-family:var(--goth);font-size:17px;margin:0 0 8px;color:var(--lilac);letter-spacing:.5px;line-height:1.25}
+.sheet p{margin:0 0 14px;font-size:14.5px;line-height:1.5}
+.sheet.tour{border-color:var(--lime);box-shadow:0 20px 60px rgba(0,0,0,.7),0 0 30px rgba(163,255,103,.3)}
+.dots{display:flex;gap:5px;margin-bottom:10px}.dots i{flex:1;max-width:28px;height:4px;border-radius:2px;background:rgba(255,255,255,.15)}.dots i.on{background:var(--lime)}
+.whychips button{text-align:left}
+.whyhint{font-size:12px;color:var(--muted);margin:6px 0 8px;line-height:1.45}
+
 </style>
 </head><body>
 <header class="top">
@@ -1253,13 +1263,36 @@ function setChartSym(sym) {
 /* ---------------- ticket ---------------- */
 const MOODS = ['Calm', 'Confident', 'Focused', 'FOMO', 'Revenge', 'Bored', 'Tired'];
 const BAD_MOODS = ['FOMO', 'Revenge', 'Bored', 'Tired'];
-const TK = { sym: null, side: 'long', setup: 'Manual', type: 'market', entry: null, stop: null, target: null, risk: null, why: '', mood: null, override: false, busy: false };
+const WHY = [
+  ['radar', 'Radar flagged it (A/B)', 'The scanner found a real setup and graded it A or B.'],
+  ['vwap', 'Right side of VWAP', "Buying above today's average price (or shorting below it). Buyers are in control."],
+  ['market', 'Market agrees', 'BTC (for coins) or SPY (for stocks) is moving the same direction.'],
+  ['volume', 'Volume spike', 'Lots of real buying or selling is behind the move.'],
+  ['level', 'Broke a key level', "Closed past yesterday's high or low, the opening range, VWAP, or a 1-hour box."],
+  ['room', 'Room to my target', 'No big level sitting in the way before the target.'],
+  ['time', 'Good time of day', 'Busy trading hours, not a dead zone.'],
+  ['practice', 'Just practicing', 'A paper trade to learn. Totally fine.']
+];
+function whyText() { const l = WHY.filter(w => TK.whyTags.includes(w[0])).map(w => w[1]).join(', '); return l + (TK.note ? (l ? '. ' : '') + TK.note : ''); }
+function whyFromSetup(s) {
+  const t = []; if (s.grade !== 'C') t.push('radar');
+  s.why.filter(w => w[0] !== '!').forEach(w => {
+    if (/^(Above|Below) VWAP/.test(w)) t.push('vwap');
+    if (/agrees/.test(w)) t.push('market');
+    if (/^Volume/.test(w)) t.push('volume');
+    if (/^(Closed|Broke|Lost|Back over)/.test(w)) t.push('level');
+    if (/^(Room|Open air)/.test(w)) t.push('room');
+    if (/Good time/.test(w)) t.push('time');
+  });
+  return uniq(t);
+}
+const TK = { sym: null, side: 'long', setup: 'Manual', type: 'market', entry: null, stop: null, target: null, risk: null, why: '', whyTags: [], note: '', mood: null, override: false, busy: false };
 function initTicket(sym, s) {
   const A = ST.an[sym];
   TK.sym = sym; TK.busy = false; TK.override = false;
   TK.risk = S.riskPerTrade;
-  if (s) { TK.side = s.side; TK.setup = s.name; TK.entry = +fp(A ? A.last : s.entry).replace(/,/g, ''); TK.stop = +rp(s.stop, s.crypto); TK.target = +rp(s.target, s.crypto); TK.why = `${s.name} (Grade ${s.grade}): ${s.why.filter(w => w[0] !== '!').join(', ')}`; }
-  else { TK.side = 'long'; TK.setup = 'Manual'; TK.entry = A ? +rp(A.last, A.crypto) : null; TK.stop = null; TK.target = null; TK.why = ''; }
+  if (s) { TK.side = s.side; TK.setup = s.name; TK.entry = +fp(A ? A.last : s.entry).replace(/,/g, ''); TK.stop = +rp(s.stop, s.crypto); TK.target = +rp(s.target, s.crypto); TK.whyTags = whyFromSetup(s); TK.note = ''; }
+  else { TK.side = 'long'; TK.setup = 'Manual'; TK.entry = A ? +rp(A.last, A.crypto) : null; TK.stop = null; TK.target = null; TK.whyTags = []; TK.note = ''; }
   TK.type = 'market'; TK.mood = null;
   renderTicket();
 }
@@ -1296,7 +1329,8 @@ function tkCalc() {
   if (!crypto && ph.k === 'open') out.warns.push('First 15 min: fakeouts everywhere.');
   if (!crypto && ph.k === 'chop') out.warns.push('Lunch chop zone: expect fakeouts, size down.');
   if (!crypto && ph.k === 'close') out.errs.push('Too close to the bell for a new day trade.');
-  if (!TK.why || TK.why.trim().length < 8) out.errs.push("Write why you're taking it (one sentence).");
+  if (!TK.whyTags.length) out.errs.push("Tap at least one reason you're taking it.");
+  else if (!TK.whyTags.includes('practice')) { const real = TK.whyTags.length; if (real < 3) out.warns.push(`Only ${real} reason${real === 1 ? '' : 's'}. Pros usually want 3 or more before they pull the trigger.`); }
   if (!TK.mood) out.errs.push('Pick your mood.');
   if (BAD_MOODS.includes(TK.mood)) out.warns.push(`You picked ${TK.mood}. Most blown-up trades start right here. Are you sure?`);
   const g = guard();
@@ -1321,7 +1355,7 @@ function renderTicket() {
     </div>
     <div class="row" style="margin-top:8px"><button class="btn sm" id="tk2R">Target = 2R</button><button class="btn sm" id="tkStopV">Stop under VWAP</button><button class="btn sm" id="tkStopL">Stop at last swing</button></div>
     <div id="tkCalc"></div>
-    <label class="f" style="margin-top:6px">Why am I taking this?<textarea id="tkWhy" placeholder="e.g. BTC reclaimed VWAP on volume, market agrees, room to PDH">${esc(TK.why)}</textarea></label>
+    <div class="f" style="margin-top:8px"><label class="f">Why am I taking this? Tap every reason that's true</label><div class="chips whychips" id="tkWhyChips">${WHY.map(([k, l, d]) => `<button data-w="${k}" class="${TK.whyTags.includes(k) ? 'on' : ''}">${TK.whyTags.includes(k) ? '✓ ' : ''}${esc(l)}</button>`).join('')}</div><div class="whyhint" id="tkWhyHint"></div><input class="in" id="tkNote" placeholder="Anything else? (optional)" value="${esc(TK.note)}"></div>
     <div class="f" style="margin-top:8px"><label class="f">Mood right now</label><div class="chips" id="tkMood">${MOODS.map(m => `<button data-m="${m}" class="${TK.mood === m ? 'on' + (BAD_MOODS.includes(m) ? ' bad' : '') : ''}">${m}</button>`).join('')}</div></div>
     ${g.locked && S.mode === 'paper' ? `<label class="row small" style="margin-top:10px"><input type="checkbox" id="tkOv" ${TK.override ? 'checked' : ''}> Override lock (paper only, logged as a rule break)</label>` : ''}
     <div id="tkMsgs"></div>
@@ -1329,7 +1363,8 @@ function renderTicket() {
     <p class="small muted" style="margin-bottom:0">${crypto ? 'Crypto: sends your entry, then places a protective stop right after it fills. Target is watched by the Copilot (Alpaca has no crypto bracket orders).' : 'Stocks: sends a bracket order, so entry, stop and target all go in at once and your exits are live from the fill.'}</p>`;
   $$('#tkSide button').forEach(b => b.onclick = () => { TK.side = b.dataset.s; renderTicket(); drawChart(); });
   const bind = (id, k) => { $(id).oninput = e => { TK[k] = e.target.value; updateTicketCalc(); drawChart(); }; };
-  bind('#tkEntry', 'entry'); bind('#tkStop', 'stop'); bind('#tkTgt', 'target'); bind('#tkRisk', 'risk'); bind('#tkWhy', 'why');
+  bind('#tkEntry', 'entry'); bind('#tkStop', 'stop'); bind('#tkTgt', 'target'); bind('#tkRisk', 'risk'); bind('#tkNote', 'note');
+  $$('#tkWhyChips button').forEach(b => b.onclick = () => { const k = b.dataset.w; TK.whyTags = TK.whyTags.includes(k) ? TK.whyTags.filter(x => x !== k) : [...TK.whyTags, k]; const on = TK.whyTags.includes(k); b.classList.toggle('on', on); b.textContent = (on ? '✓ ' : '') + WHY.find(w => w[0] === k)[1]; updateTicketCalc(); });
   $('#tkType').onchange = e => { TK.type = e.target.value; updateTicketCalc(); };
   $('#tkSetup').onchange = e => { TK.setup = e.target.value; };
   $$('#tkMood button').forEach(b => b.onclick = () => { TK.mood = b.dataset.m; $$('#tkMood button').forEach(x => x.className = x.dataset.m === TK.mood ? 'on' + (BAD_MOODS.includes(TK.mood) ? ' bad' : '') : ''); updateTicketCalc(); });
@@ -1343,6 +1378,7 @@ function renderTicket() {
 function updateTicketCalc() {
   if (!TK.sym || !$('#tkCalc')) return;
   const c = tkCalc();
+  const hEl = $('#tkWhyHint'); if (hEl) { const sel = WHY.filter(w => TK.whyTags.includes(w[0])); hEl.innerHTML = sel.length ? sel.map(w => '• <b>' + esc(w[1]) + ':</b> ' + esc(w[2])).join('<br>') : 'Not sure? Tap the reasons that match the green ✓ tags on the Radar card.'; }
   $('#tkCalc').innerHTML = `<div class="calc">
     <div class="num"><span>${c.crypto ? 'Qty' : 'Shares'}</span><b>${c.qty ? (c.crypto ? c.qty : c.qty.toLocaleString()) : '—'}</b></div>
     <div class="num"><span>Size</span><b>${c.notional ? f$(c.notional) : '—'}</b></div>
@@ -1378,9 +1414,9 @@ async function sendTicket() {
       else toast('Heads up', 'Limit entry: once it fills, the Copilot will show a "Place stop" button.');
     }
     chime('ok');
-    plans.push({ id: order.id, sym: norm(sym), symbol: sym, side: TK.side, setup: TK.setup, entry: c.entry, stop: c.stop, target: c.tgt, qty: c.qty, riskD: c.riskD, why: TK.why, mood: TK.mood, time: Date.now(), mode: S.mode, override: !!TK.override });
+    plans.push({ id: order.id, sym: norm(sym), symbol: sym, side: TK.side, setup: TK.setup, entry: c.entry, stop: c.stop, target: c.tgt, qty: c.qty, riskD: c.riskD, why: whyText(), whyTags: TK.whyTags.slice(), mood: TK.mood, time: Date.now(), mode: S.mode, override: !!TK.override });
     LS.set('plans', plans.slice(-500));
-    TK.why = ''; TK.mood = null; TK.override = false;
+    TK.whyTags = []; TK.note = ''; TK.mood = null; TK.override = false;
     setTimeout(tickAccount, 800); setTimeout(tickAccount, 3000);
   } catch (e) { toast('Order rejected', e.message, 'bad'); chime('warn'); }
   finally { TK.busy = false; renderTicket(); }
@@ -1626,7 +1662,7 @@ function aiContext() {
     markets: ['SPY', 'QQQ', 'BTC/USD', 'ETH/USD'].map(pick).filter(Boolean),
     chart_symbol: pick(CH.sym),
     live_setups: activeSetups().slice(0, 8).map(s => ({ sym: s.sym, setup: s.name, side: s.side, grade: s.grade, entry: +fp(s.entry).replace(/,/g, ''), stop: +fp(s.stop).replace(/,/g, ''), target: +fp(s.target).replace(/,/g, ''), notes: s.why })),
-    ticket: TK.sym ? { sym: TK.sym, side: TK.side, setup: TK.setup, entry: TK.entry, stop: TK.stop, target: TK.target, risk$: TK.risk, why: TK.why, mood: TK.mood } : null,
+    ticket: TK.sym ? { sym: TK.sym, side: TK.side, setup: TK.setup, entry: TK.entry, stop: TK.stop, target: TK.target, risk$: TK.risk, why: whyText(), mood: TK.mood } : null,
     positions: ST.positions.map(p => { const x = posInfo(p); return { sym: x.sym, side: x.side, qty: x.qty, entry: x.entry, price: x.cur, upl: x.upl, R: x.R != null ? +x.R.toFixed(2) : null, stop: x.stopO ? +x.stopO.stop_price : null, plan: x.plan ? { setup: x.plan.setup, stop: x.plan.stop, target: x.plan.target, why: x.plan.why } : null }; }),
     journal: (() => { const s = statsOf(ST.trips); return { trades: s.n, winRate: +(s.win * 100).toFixed(0), expectancy: +s.exp.toFixed(2), avgWin: +s.avgW.toFixed(2), avgLoss: +s.avgL.toFixed(2), pf: s.pf === Infinity ? 'inf' : +s.pf.toFixed(2), recent: ST.trips.slice(0, 12).map(t => ({ sym: t.sym, side: t.side, pnl: +t.pnl.toFixed(2), R: t.R != null ? +t.R.toFixed(2) : null, setup: tripTag(t).setup, mood: tripTag(t).mood, followed: tripTag(t).followed })) }; })()
   };
@@ -1700,7 +1736,7 @@ function openSettings() {
     <div class="sub" style="margin-bottom:6px">Ask the War Room (Claude)</div>
     <div class="fg"><label class="f">Anthropic API key<input id="sAI" type="password" value="${esc(S.aiKey)}" autocomplete="off"></label><label class="f">Model<input id="sAIM" value="${esc(S.aiModel)}"></label></div>
     <div class="hr"></div>
-    <div class="row"><button class="btn go" id="sSave">Save</button><div class="spacer"></div><button class="btn sm" id="sWipe">Clear all local data</button></div>`;
+    <div class="row"><button class="btn go" id="sSave">Save</button><button class="btn sm" id="sTour">Replay guide</button><div class="spacer"></div><button class="btn sm" id="sWipe">Clear all local data</button></div>`;
   let mode = S.mode;
   const gate = () => {
     $$('#setMode button').forEach(b => b.className = b.dataset.m === mode ? 'on ' + (mode === 'paper' ? 'long' : 'short') : '');
@@ -1733,9 +1769,65 @@ function openSettings() {
     setConn(false); boot();
   };
   $('#sWipe').onclick = e => { const b = e.target; if (!b.dataset.armed) { b.dataset.armed = 1; b.textContent = 'Tap again: wipes keys, journal tags, plans'; return; } try { Object.keys(localStorage).filter(k => k.startsWith('wr_')).forEach(k => localStorage.removeItem(k)); } catch (err) {} location.reload(); };
+  $('#sTour').onclick = () => { closeSettings(); startTour(); };
   $('#settings').classList.add('on');
 }
 function closeSettings() { $('#settings').classList.remove('on'); }
+
+/* ---------------- guide + help ---------------- */
+const HELP = {
+  "Today's Read": ['The mood check', "Your weather report before you trade. <b>Risk-On</b> = prices climbing, buying is easier. <b>Risk-Off</b> = prices falling, be careful or sit out. <b>Mixed</b> = be picky. The tiles show each market: ▲ means price is above its VWAP (today's average price) and trending up."],
+  'Crypto Board': ['Your game plan for each coin', "Each card is a plan written for you. <b>Long idea</b> = the price that, if it breaks, is a good spot to buy. <b>Danger</b> = the price that, if lost, means don't buy. The blue chips are key levels: <b>PDH/PDL</b> = yesterday's high/low, <b>PDC</b> = yesterday's close, <b>VWAP</b> = today's average price. Price tends to react at these."],
+  'Stocks In Play': ['Stocks worth watching', "Today's biggest movers and most-traded stocks, each with the same kind of plan as the crypto board. <b>PMH/PML</b> = premarket high/low, <b>ORH/ORL</b> = the high/low of the first 15 minutes. Stocks only trade 9:30am–4pm ET on weekdays."],
+  'Session Clock': ['When to trade', 'Timing matters. The best stock moves happen 9:45–11:30am ET, lunch is choppy, and 3–4pm picks back up. For crypto, the busiest times are around 9:30am ET and 8–10pm ET when Asia opens.'],
+  'Hottest Setups': ['Best trades right now', 'The top live setups from the Radar. Tap <b>Build ticket</b> to take one, or <b>See it on chart</b> to look first.'],
+  'Setup Radar': ['The scanner', "Every minute the app scans your coins and stocks for patterns traders commonly buy. Each card gives you <b>Entry</b> (where to buy), <b>Stop</b> (where to get out if you're wrong, a small planned loss) and <b>Target</b> (where to take profit, 2× what you risk). <b>Grade A</b> = most things line up, <b>C</b> = skip it. <b>SELL / AVOID</b> = prices are dropping, a warning, not a trade. A quiet radar is normal. No setup = no trade."],
+  'Earlier Setups': ['Practice with real history', 'These setups already happened. Each shows whether it would have <b>WON</b> (hit target, +2R) or <b>LOST</b> (hit stop, −1R). Tap <b>See it on chart</b> to study what it looked like. This is how you train your eye.'],
+  'Setup Scoreboard': ['Which setups actually work', "<b>R</b> = the amount you risked. +2R means you made twice your risk, −1R means you lost the amount you planned to. <b>Avg R above 0</b> = that setup has been making money lately. Trust the ones with more samples."],
+  'The Playbook': ['Setup dictionary', 'Tap any setup name to learn what it is and why it works.'],
+  'Position Copilot': ["Managing a trade you're in", "Once you're in a trade, this tells you what to do next. The bar shows where you are: left = near your stop, right = near your target. <b>Move stop to breakeven</b> (at +1R) means you can't lose on the trade anymore. Stocks: stop and target run automatically. Crypto: the stop runs automatically and the Copilot tells you when the target hits."],
+  'Trade Ticket': ['Placing a trade', "Pick a Radar setup and this fills itself in. <b>Risk $</b> is the most you can lose. The app picks how much to buy so a stop-out costs exactly that. <b>R:R</b> should be 2:1 or better. Tap your reasons and mood, then tap Buy twice. In PAPER mode it's fake money."],
+  'Open Orders': ['Orders waiting', 'Your stop and target orders sitting at Alpaca, ready to fire. ✕ cancels one.'],
+  'Edge Report': ['Your stats', '<b>Win rate</b> = % of trades that made money. <b>Expectancy</b> = what you make on average per trade, the #1 number. Above $0 means your trading makes money over time. <b>Profit factor</b> = total wins ÷ total losses. Above 1.3 is solid.'],
+  'Trade Log': ["Every trade you've made", 'Pulled automatically from Alpaca. Tap a trade to tag whether you followed your plan. Be honest, because this is what reveals your patterns.'],
+  'Level Up': ['Your path to real money', "Hit all four goals in paper before going live. It's the same idea prop firms use to decide who gets funded."],
+  'Homework': ['Nightly practice', 'Short tasks picked from your own data. 20 minutes a night adds up fast.'],
+  'Ask the War Room': ['Chat coach', 'Ask about anything on your screen. Needs an Anthropic API key in Settings.']
+};
+function showSheet(html) { closeSheet(); const el = document.createElement('div'); el.className = 'sheet'; el.id = 'sheet'; el.innerHTML = html; document.body.appendChild(el); return el; }
+function closeSheet() { const s = $('#sheet'); if (s) s.remove(); }
+function setupHelp() {
+  $$('.card h2').forEach(h => {
+    if (h.querySelector('.qm')) return;
+    const key = Object.keys(HELP).find(k => h.textContent.includes(k)); if (!key) return;
+    const b = document.createElement('button'); b.className = 'qm'; b.textContent = '?'; b.setAttribute('aria-label', 'Help: ' + key);
+    b.onclick = e => { e.stopPropagation(); const [t, body] = HELP[key]; showSheet(`<h3>${t}</h3><p>${body}</p><button class="btn pri block" onclick="closeSheet()">Got it</button>`); };
+    const r = h.querySelector('.r'); if (r) h.insertBefore(b, r); else h.appendChild(b);
+  });
+}
+const TOUR = [
+  { v: 'dock', t: 'Welcome to your War Room 🌙', b: "This app finds trades for you, tells you exactly where to get in and out, and coaches you while you learn. You're in <b>PAPER</b> mode, which is fake money, so nothing here can cost you. Quick 1-minute tour." },
+  { v: 'dock', t: '1 · Check the mood', b: 'Start every session here on the <b>Dock</b>. The big word says if the market is <b>Risk-On</b> (rising, good for buying), <b>Risk-Off</b> (falling, careful) or <b>Mixed</b> (be picky). Below it is a game plan for each coin and stock.' },
+  { v: 'radar', t: '2 · The Radar finds trades', b: "The scanner checks the charts every minute. When a pattern shows up, a card appears here and you hear a chime. <b>No card = no trade.</b> It's quiet most of the time, and that's normal." },
+  { v: 'radar', t: '3 · Reading a setup card', b: "<b>Entry</b> = where you buy. <b>Stop</b> = where you get out if you're wrong (a small, planned loss). <b>Target</b> = where you take profit (2× your risk). <b>Grade A/B</b> = worth taking, <b>C</b> = skip. Green ✓ tags are reasons it's good, pink ⚠ tags are red flags." },
+  { v: 'chart', t: '4 · Taking the trade', b: "Tap <b>Build ticket</b> on a card and the ticket fills itself in. The reasons it's a good trade are already checked for you. Pick your mood and tap <b>Buy</b> twice. The app sizes the trade so you can only lose your Risk $." },
+  { v: 'chart', t: '5 · The Copilot manages it', b: "Once you're in, the <b>Position Copilot</b> tells you what to do: hands off, move your stop to breakeven, or take profit. Your stop is placed automatically, so you're protected even if you walk away." },
+  { v: 'journal', t: '6 · The Journal keeps score', b: 'Every trade lands here automatically with your win rate and which setups and moods make or cost you money. Hit the 4 <b>Level Up</b> goals in paper before ever using real money.' },
+  { v: 'dock', t: "You're ready", b: 'First mission: wait for a <b>Grade A or B LONG</b> on the Radar (crypto is busiest 8–10pm ET), take it in paper, and let the Copilot guide you. Tap any <b>?</b> button for help on that section. You can replay this tour from ⚙ Settings.' }
+];
+let tourI = 0;
+function startTour() { tourI = 0; renderTour(); }
+function renderTour() {
+  const s = TOUR[tourI]; go(s.v);
+  const last = tourI === TOUR.length - 1;
+  const el = showSheet(`<div class="dots">${TOUR.map((_, i) => `<i class="${i <= tourI ? 'on' : ''}"></i>`).join('')}</div><h3>${s.t}</h3><p>${s.b}</p>
+    <div class="row">${tourI ? '<button class="btn sm" id="tBack">Back</button>' : ''}<div class="spacer"></div>${last ? '' : '<button class="btn sm" id="tSkip">Skip</button>'}<button class="btn pri" id="tNext">${last ? "Let's go" : 'Next'}</button></div>`);
+  el.classList.add('tour');
+  if ($('#tBack')) $('#tBack').onclick = () => { tourI--; renderTour(); };
+  if ($('#tSkip')) $('#tSkip').onclick = endTour;
+  $('#tNext').onclick = () => { if (last) endTour(); else { tourI++; renderTour(); } };
+}
+function endTour() { closeSheet(); LS.set('tourDone', true); go('dock'); }
 
 /* ---------------- nav / boot ---------------- */
 function go(v) {
@@ -1785,7 +1877,9 @@ function init() {
   $('#symIn').value = CH.sym;
   $('#tvLink').href = 'https://www.tradingview.com/chart/?symbol=COINBASE:' + CH.sym.replace('/', '');
   renderChat();
+  setupHelp();
   boot();
+  if (!LS.get('tourDone', false)) setTimeout(startTour, 700);
 }
 document.addEventListener('DOMContentLoaded', init);
 
