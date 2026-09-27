@@ -275,6 +275,14 @@ details summary{cursor:pointer;font-weight:800;color:var(--lilac);font-size:13px
 .goline{padding:10px 12px;border-radius:12px;background:rgba(20,20,20,.45);border:1px solid var(--line);margin:6px 0;font-size:14px;line-height:1.4}
 details.adv{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
 details.adv summary{color:var(--muted);font-size:12px}
+/* risk display */
+.riskbox{border:2px solid var(--pink);border-radius:16px;padding:12px 14px;background:rgba(233,9,124,.1);margin:6px 0 8px;text-align:center}
+.riskbox .lbl{font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:800;color:var(--bubble)}
+.riskbox .amt{font-family:var(--goth);font-size:34px;color:#fff;line-height:1.15;text-shadow:0 0 18px rgba(233,9,124,.6)}
+.riskbox .rsub{font-size:12.5px;color:var(--frost);margin-top:2px}
+.riskbox .rsub2{font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.45;text-align:left}
+.atrisk{font-size:13px;font-weight:600;margin-top:8px;padding:7px 10px;border-radius:10px;background:rgba(233,9,124,.1);border:1px solid rgba(233,9,124,.35)}
+.atrisk.safe{background:rgba(163,255,103,.08);border-color:rgba(163,255,103,.35)}
 
 </style>
 </head><body>
@@ -974,6 +982,7 @@ function renderGuard() {
     <div class="gchip"><span>Trades</span><b>${g.nTrades}/${S.maxTrades}</b></div>
     <div class="gchip"><span>Equity</span><b>${a ? f$(+a.equity) : '—'}</b></div>
     <div class="gchip"><span>Buying pwr</span><b>${a ? f$(+a.buying_power) : '—'}</b></div>
+    <div class="gchip"><span>Open risk now</span>${openRiskChip()}</div>
     <div class="gchip"><span>Risk / trade</span><b>${f$(S.riskPerTrade)}</b></div>`;
 }
 function setConn(ok, msg) {
@@ -1345,6 +1354,9 @@ function tkCalc() {
   if (qty * entry > bp) { qty = crypto ? Math.floor(bp * 0.98 / entry * 1e6) / 1e6 : Math.floor(bp * 0.98 / entry); out.warns.push('Size capped by your buying power.'); }
   out.qty = qty; out.notional = qty * entry; out.riskD = qty * per; out.rr = per ? Math.abs(tgt - entry) / per : 0; out.rewardD = qty * Math.abs(tgt - entry);
   out.fee = crypto ? out.notional * 0.0025 * 2 : 0;
+  const eqv = a ? +a.equity : 0;
+  if (eqv && out.riskD / eqv > 0.02) out.warns.push(`This risks ${(out.riskD / eqv * 100).toFixed(1)}% of your account on one trade. Most traders keep it under 1–2%.`);
+  if (a && out.notional > +a.buying_power * 0.5 && bp !== Infinity) out.warns.push(`This puts ${f$(out.notional)} to work, which is over half your buying power. Fine for paper, but think about it with real money.`);
   if (per && out.rr < 1.5) out.warns.push(`R:R is only ${out.rr.toFixed(1)}:1. Pros want 2:1 or better.`);
   if (per && entry && per / entry < 0.001) out.warns.push('Stop is super tight, so normal noise will tag it.');
   if (crypto && out.fee > out.rewardD * 0.25 && out.rewardD) out.warns.push(`Fees (~${f$(out.fee)} round trip) eat ${Math.round(out.fee / out.rewardD * 100)}% of your target profit. Go for a bigger move or skip.`);
@@ -1415,12 +1427,12 @@ function updateTicketCalc() {
   $('#tkMsgs').innerHTML = c.errs.map(e => `<div class="warnbox">${esc(e)}</div>`).join('') + c.warns.map(w => `<div class="infobox">${esc(w)}</div>`).join('') +
     (!c.errs.length && !c.warns.length ? `<div class="okbox">✓ Clean ticket. Risking ${f$(c.riskD)} to make ${f$(c.rewardD)}.</div>` : '');
   const b = $('#tkSend'); b.disabled = c.errs.length > 0 || TK.busy;
-  b.textContent = TK.busy ? 'Sending…' : `${S.mode === 'live' ? '⚠ LIVE · ' : ''}${c.crypto ? 'Buy' : TK.side === 'long' ? 'Buy' : 'Short'} ${c.qty || ''} ${TK.sym}${c.crypto ? '' : ' · bracket'}`;
+  b.textContent = TK.busy ? 'Sending…' : `${S.mode === 'live' ? '⚠ LIVE · ' : ''}${c.crypto ? 'Buy' : TK.side === 'long' ? 'Buy' : 'Short'} ${c.qty || ''} ${TK.sym}${c.riskD ? ' · risk ' + f$(c.riskD) : ''}`;
 }
 async function sendTicket(skipArm) {
   const c = tkCalc(); if (c.errs.length || TK.busy) return;
   const b = $('#tkSend');
-  if (!skipArm && b && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Tap again to confirm'; setTimeout(() => { if (b) { delete b.dataset.armed; updateTicketCalc(); } }, 3500); return; }
+  if (!skipArm && b && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = `Tap again: yes, risk ${f$(c.riskD)}`; setTimeout(() => { if (b) { delete b.dataset.armed; updateTicketCalc(); } }, 3500); return; }
   if (b) delete b.dataset.armed;
   TK.busy = true; updateTicketCalc();
   const crypto = c.crypto, sym = TK.sym;
@@ -1512,6 +1524,7 @@ function renderPositions() {
       <div class="hd"><b style="font-size:17px">${esc(x.crypto ? toPair(x.sym) : x.sym)}</b><span class="tag ${x.side}">${x.side}</span>${x.plan ? `<span class="tag">${esc(x.plan.setup)}</span>` : ''}
         <span class="pl ${cls(x.upl)}">${f$(x.upl, 1)}${x.R != null ? ` <span class="small">${x.R >= 0 ? '+' : ''}${x.R.toFixed(2)}R</span>` : ''}</span></div>
       <div class="small muted mono" style="margin-top:4px">${x.qty} @ ${fp(x.entry)} → ${fp(x.cur)} · stop ${x.stopO ? fp(+x.stopO.stop_price) : '<span class="neg">NONE</span>'} · target ${x.target ? fp(x.target) : '—'}</div>
+      ${(r => r.kind === 'none' ? `<div class="atrisk">⚠ No stop, so your whole ${f$(r.amt)} position is at risk. Place a stop.</div>` : r.kind === 'risk' ? `<div class="atrisk">At risk right now: <b>${f$(r.amt)}</b> if it drops to your stop at ${fp(r.stop)}</div>` : `<div class="atrisk safe">🔒 Can't lose anymore. Your stop at ${fp(r.stop)} locks in about <b>${f$(r.amt)}</b> profit.</div>`)(posRisk(x))}
       ${x.R != null ? `<div class="rbar"><i style="left:0;width:33.3%;background:rgba(233,9,124,.25)"></i><i style="left:33.3%;width:66.7%;background:rgba(163,255,103,.12)"></i><i style="left:calc(${pct}% - 3px);width:6px;background:#fff;box-shadow:0 0 8px #fff"></i></div>
         <div class="small muted mono" style="display:flex;justify-content:space-between"><span>−1R stop</span><span>0</span><span>+1R</span><span>+2R</span></div>` : ''}
       <div class="prompt ${pc}">${pr}</div>
@@ -1749,6 +1762,7 @@ function openSettings() {
       <label class="f">Max trades / day<input id="sMT" inputmode="numeric" value="${S.maxTrades}" ${fr ? 'disabled' : ''}></label>
       <label class="f">Cooldown after 2 losses (min)<input id="sCD" inputmode="numeric" value="${S.cooldownMin}" ${fr ? 'disabled' : ''}></label>
     </div>
+    ${ST.account ? `<p class="small"><b>Right now ${f$(S.riskPerTrade)} per trade = ${(S.riskPerTrade / +ST.account.equity * 100).toFixed(2)}% of your ${f$(+ST.account.equity)} account.</b></p>` : ''}
     <p class="small muted">Rule of thumb: risk 0.5–1% of your account per trade, and cap the day at 2–3× that. Rules freeze for the rest of the day once you hit a lock, so you can't talk yourself out of them mid-tilt.</p>
     <div class="hr"></div>
     <div class="sub" style="margin-bottom:6px">Watchlists</div>
@@ -1855,11 +1869,31 @@ function goTime(sym) {
   const px = ck.A.last, risk = px - ck.trig.stop; TK.entry = +rp(px, ck.crypto); TK.target = +rp(px + 2 * risk, ck.crypto);
   renderGo();
 }
+function riskBox(c) {
+  if (!c.riskD) return '';
+  const eq = ST.account ? +ST.account.equity : 0;
+  const pct = eq ? c.riskD / eq * 100 : null;
+  const worst = c.riskD * 1.1 + (c.fee || 0);
+  return `<div class="riskbox"><div class="lbl">You're risking</div><div class="amt">${f$(c.riskD)}</div>
+    <div class="rsub">${pct != null ? `${pct < 0.1 ? pct.toFixed(2) : pct.toFixed(1)}% of your account · ` : ''}worst case about ${f$(worst)} if it slips past your stop${c.fee ? ' + fees' : ''}</div>
+    <div class="rsub2">💡 You're putting <b>${f$(c.notional)}</b> into this trade, but that's <b>not</b> what you can lose. You only lose if the price falls to your stop, and then you lose about <b>${f$(c.riskD)}</b>.</div></div>`;
+}
+function posRisk(x) {
+  if (!x.stopO) return { kind: 'none', amt: x.qty * x.cur };
+  const s = +x.stopO.stop_price, r = (x.side === 'long' ? x.entry - s : s - x.entry) * x.qty;
+  return r > 0 ? { kind: 'risk', amt: r, stop: s } : { kind: 'locked', amt: -r, stop: s };
+}
+function openRiskChip() {
+  if (!ST.positions.length) return '<b>$0.00</b>';
+  let tot = 0, naked = false;
+  ST.positions.forEach(p => { const r = posRisk(posInfo(p)); if (r.kind === 'none') naked = true; else if (r.kind === 'risk') tot += r.amt; });
+  return naked ? '<b class="neg">⚠ no stop</b>' : `<b class="${tot > 0 ? 'neg' : 'pos'}">${f$(tot)}</b>`;
+}
 function planLines(c) {
   if (!c.stop || !c.tgt || !c.qty) return `<div class="goline muted">No plan yet. Tap <b>GO TIME</b> on a lit-up card in the Radar, or open Advanced to set your own numbers.</div>`;
   const unit = TK.sym.split('/')[0];
   const net = c.rewardD - (c.fee || 0);
-  return `<div class="goline">🟢 <b>${TK.side === 'long' ? 'Buy' : 'Short'}</b> about <b>${f$(c.notional)}</b> of ${esc(unit)} ${c.crypto ? `(${c.qty} ${esc(unit)})` : `(${c.qty} shares)`}</div>
+  return riskBox(c) + `<div class="goline">🟢 <b>${TK.side === 'long' ? 'Buy' : 'Short'}</b> about <b>${f$(c.notional)}</b> of ${esc(unit)} ${c.crypto ? `(${c.qty} ${esc(unit)})` : `(${c.qty} shares)`}</div>
     <div class="goline">🛑 If it drops to <b>${fp(c.stop)}</b>, you're out automatically. The most you can lose: <b class="neg">${f$(c.riskD)}</b></div>
     <div class="goline">🎯 If it climbs to <b>${fp(c.tgt)}</b>, take the profit: about <b class="${cls(net)}">${f$(net, 1)}</b>${c.fee ? ' after fees' : ''}</div>`;
 }
@@ -1871,14 +1905,14 @@ function renderGo() {
     ${planLines(c)}
     <div class="f" style="margin-top:10px"><label class="f">How are you feeling?</label><div class="chips" id="goMood">${MOODS.map(m => `<button data-m="${m}" class="${TK.mood === m ? 'on' + (BAD_MOODS.includes(m) ? ' bad' : '') : ''}">${m}</button>`).join('')}</div></div>
     <div>${c.errs.filter(e => !/mood/i.test(e)).map(e => `<div class="warnbox">${esc(e)}</div>`).join('')}${c.warns.map(w => `<div class="infobox">${esc(w)}</div>`).join('')}</div>
-    <button class="gobtn${ready ? ' ready' : ''}" id="goBuy" style="margin-top:8px">${S.mode === 'live' ? '⚠ LIVE · ' : ''}BUY IT${S.mode === 'paper' ? ' (PAPER)' : ''}</button>
+    <button class="gobtn${ready ? ' ready' : ''}" id="goBuy" style="margin-top:8px">${S.mode === 'live' ? '⚠ LIVE · ' : ''}RISK ${f$(c.riskD)} · BUY${S.mode === 'paper' ? ' (PAPER)' : ''}</button>
     <div class="row" style="margin-top:8px"><button class="btn sm" onclick="closeSheet()">Not now</button><div class="spacer"></div><button class="btn sm" id="goAdv">Advanced</button></div>`);
   el.classList.add('tour');
   $$('#goMood button').forEach(x => x.onclick = () => { TK.mood = x.dataset.m; renderGo(); });
   const btn = $('#goBuy');
   btn.onclick = async () => {
     if (!ready) return toast('Almost', TK.mood ? 'Fix the item above first.' : "Tap how you're feeling first.");
-    if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.textContent = 'TAP AGAIN TO BUY'; return; }
+    if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.textContent = `TAP AGAIN: YES, RISK ${f$(c.riskD)}`; return; }
     const before = TK.lastOk, sym = TK.sym; btn.textContent = 'Buying…';
     await sendTicket(true);
     if (TK.lastOk !== before) { closeSheet(); go('chart'); setChartSym(sym); } else renderGo();
@@ -1899,7 +1933,7 @@ const HELP = {
   'Setup Scoreboard': ['Which setups actually work', "<b>R</b> = the amount you risked. +2R means you made twice your risk, −1R means you lost the amount you planned to. <b>Avg R above 0</b> = that setup has been making money lately. Trust the ones with more samples."],
   'The Playbook': ['Setup dictionary', 'Tap any setup name to learn what it is and why it works.'],
   'Position Copilot': ["Managing a trade you're in", "Once you're in a trade, this tells you what to do next. The bar shows where you are: left = near your stop, right = near your target. <b>Move stop to breakeven</b> (at +1R) means you can't lose on the trade anymore. Stocks: stop and target run automatically. Crypto: the stop runs automatically and the Copilot tells you when the target hits."],
-  'Trade Ticket': ['Placing a trade', "Pick a Radar setup and this fills itself in. <b>Risk $</b> is the most you can lose. The app picks how much to buy so a stop-out costs exactly that. <b>R:R</b> should be 2:1 or better. Tap your reasons and mood, then tap Buy twice. In PAPER mode it's fake money."],
+  'Trade Ticket': ['Placing a trade', "Pick a Radar setup and this fills itself in. The big pink box is <b>what you're risking</b>, the most you lose if it goes wrong. The amount you put <i>into</i> the trade is bigger, but you don't lose that. The app picks how much to buy so a stop-out costs exactly your risk amount. <b>R:R</b> should be 2:1 or better. Tap your reasons and mood, then tap Buy twice. In PAPER mode it's fake money."],
   'Open Orders': ['Orders waiting', 'Your stop and target orders sitting at Alpaca, ready to fire. ✕ cancels one.'],
   'Edge Report': ['Your stats', '<b>Win rate</b> = % of trades that made money. <b>Expectancy</b> = what you make on average per trade, the #1 number. Above $0 means your trading makes money over time. <b>Profit factor</b> = total wins ÷ total losses. Above 1.3 is solid.'],
   'Trade Log': ["Every trade you've made", 'Pulled automatically from Alpaca. Tap a trade to tag whether you followed your plan. Be honest, because this is what reveals your patterns.'],
