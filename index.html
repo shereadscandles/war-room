@@ -537,9 +537,13 @@ const cloudOn = () => !!(CLOUD.sb && CLOUD.session);
 const viaProxy = () => cloudOn() && !!CLOUD.conn[S.mode];
 async function initCloud() {
   if (!window.supabase || SB_URL.startsWith('__')) return;
-  CLOUD.sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'wr_sb_auth' } });
+  const h = new URLSearchParams(location.hash.slice(1));
+  CLOUD.linkErr = h.get('error_code') ? (h.get('error_code') === 'otp_expired' ? 'That email link expired or was already used. Only the newest email works. Tap Sign in, and if it says not confirmed, tap Resend.' : (h.get('error_description') || 'Email link failed')) : null;
+  CLOUD.linkType = h.get('type');
+  CLOUD.sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'wr_sb_auth', detectSessionInUrl: true } });
+  CLOUD.sb.auth.onAuthStateChange((ev, sess) => { CLOUD.session = sess; if (ev === 'SIGNED_OUT') { CLOUD.conn = {}; CLOUD.ready = false; } if (ev === 'PASSWORD_RECOVERY') CLOUD.recovery = true; });
   const { data } = await CLOUD.sb.auth.getSession(); CLOUD.session = data.session;
-  CLOUD.sb.auth.onAuthStateChange((ev, sess) => { CLOUD.session = sess; if (ev === 'SIGNED_OUT') { CLOUD.conn = {}; CLOUD.ready = false; } });
+  if (CLOUD.linkErr || CLOUD.linkType) history.replaceState(null, '', location.pathname + location.search);
   if (CLOUD.session) { await loadCloud(); await refreshConn(); }
 }
 async function fnCall(action, extra = {}) {
@@ -592,6 +596,18 @@ async function loadCloud() {
 }
 async function signIn(email, pw) { const { data, error } = await CLOUD.sb.auth.signInWithPassword({ email, password: pw }); if (error) throw error; CLOUD.session = data.session; await loadCloud(); await refreshConn(); }
 async function signUp(email, pw) { const { data, error } = await CLOUD.sb.auth.signUp({ email, password: pw, options: { emailRedirectTo: location.origin + location.pathname } }); if (error) throw error; return data; }
+function authMsg(e) {
+  const m = String((e && e.message) || e || '');
+  if (/not confirmed/i.test(m)) return 'Your email isn\'t confirmed yet. Open the NEWEST War Room email and tap the link once (older ones stop working), or tap Resend below.';
+  if (/invalid login credentials/i.test(m)) return 'Email or password doesn\'t match. If you tried a few different passwords, tap Forgot password to set a new one.';
+  if (/already registered|already been registered/i.test(m)) return 'You already have an account with that email. Tap Sign in instead.';
+  if (/rate limit|too many|security purposes/i.test(m)) return 'Too many emails sent in a short time. Wait about an hour, then try once more.';
+  return m || 'Something went wrong';
+}
+const authRedirect = () => location.origin + location.pathname;
+async function resendConfirm(email) { const { error } = await CLOUD.sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: authRedirect() } }); if (error) throw error; }
+async function sendReset(email) { const { error } = await CLOUD.sb.auth.resetPasswordForEmail(email, { redirectTo: authRedirect() }); if (error) throw error; }
+async function setNewPassword(pw) { const { error } = await CLOUD.sb.auth.updateUser({ password: pw }); if (error) throw error; CLOUD.recovery = false; }
 async function signOut() { try { await CLOUD.sb.auth.signOut(); } catch (e) {} CLOUD.session = null; CLOUD.conn = {}; CLOUD.ready = false; }
 function handleAlpacaReturn() {
   const p = new URLSearchParams(location.search); const r = p.get('alpaca'); if (!r) return;
@@ -601,9 +617,10 @@ function handleAlpacaReturn() {
 }
 function accountHtml() {
   if (!CLOUD.sb) return `<p class="small muted" style="margin-top:0">Accounts aren't switched on yet.</p>`;
-  if (!cloudOn()) return `<p class="small" style="margin-top:0">Sign in once and your settings, journal and Alpaca connection follow you to every device. No more pasting keys.</p>
+  if (cloudOn() && CLOUD.recovery) return `<p class="small" style="margin-top:0"><b>Set your new War Room password</b></p><div class="fg"><label class="f">New password<input id="aNewPw" type="password" autocomplete="new-password"></label></div><div class="row" style="margin-top:8px"><button class="btn go" id="aSetPw">Save new password</button></div><div class="small" id="aOut" style="margin-top:6px"></div>`;
+  if (!cloudOn()) return `${CLOUD.linkErr ? `<p class="small neg" style="margin-top:0">${esc(CLOUD.linkErr)}</p>` : ''}<p class="small" style="margin-top:0">Sign in once and your settings, journal and Alpaca connection follow you to every device. No more pasting keys.</p>
     <div class="fg"><label class="f">Email<input id="aEmail" type="email" autocomplete="email" autocapitalize="off"></label><label class="f">Password<input id="aPw" type="password" autocomplete="current-password"></label></div>
-    <div class="row" style="margin-top:8px"><button class="btn go" id="aIn">Sign in</button><button class="btn sm" id="aUp">Create account</button></div><div class="small" id="aOut" style="margin-top:6px"></div><p class="small muted" style="margin-bottom:0">By creating an account you agree to the <a href="terms.html" target="_blank">Terms</a> and <a href="privacy.html" target="_blank">Privacy Policy</a>. Not financial advice.</p>`;
+    <div class="row" style="margin-top:8px"><button class="btn go" id="aIn">Sign in</button><button class="btn sm" id="aUp">Create account</button></div><div class="row" style="margin-top:6px"><button class="btn sm" id="aResend">Resend confirm email</button><button class="btn sm" id="aForgot">Forgot password</button></div><div class="small" id="aOut" style="margin-top:6px"></div><p class="small muted" style="margin-bottom:0">By creating an account you agree to the <a href="terms.html" target="_blank">Terms</a> and <a href="privacy.html" target="_blank">Privacy Policy</a>. Not financial advice.</p>`;
   const row = env => `<div class="row" style="margin:6px 0"><span class="tag ${CLOUD.conn[env] ? 'win' : ''}">${env.toUpperCase()}</span><span class="small">${CLOUD.conn[env] ? '✓ Alpaca connected' : 'Not connected'}</span><div class="spacer"></div>${CLOUD.conn[env] ? `<button class="btn sm" onclick="disconnectAlpaca('${env}')">Disconnect</button>` : `<button class="btn sm ${env === 'paper' ? 'go' : ''}" onclick="connectAlpaca('${env}')">Connect ${env}</button>`}</div>`;
   return `<div class="row"><span class="small">Signed in as <b>${esc(CLOUD.session.user.email)}</b></span><div class="spacer"></div><button class="btn sm" id="aSignOut">Sign out</button></div>
     ${row('paper')}${row('live')}
@@ -1908,8 +1925,12 @@ function openSettings() {
   };
   $('#sWipe').onclick = e => { const b = e.target; if (!b.dataset.armed) { b.dataset.armed = 1; b.textContent = 'Tap again: wipes keys, journal tags, plans'; return; } try { Object.keys(localStorage).filter(k => k.startsWith('wr_')).forEach(k => localStorage.removeItem(k)); } catch (err) {} location.reload(); };
   $('#sTour').onclick = () => { closeSettings(); startTour(); };
-  if ($('#aIn')) $('#aIn').onclick = async () => { const out = $('#aOut'); out.textContent = 'Signing in…'; try { await signIn($('#aEmail').value.trim(), $('#aPw').value); toast('Signed in', 'Welcome back 🌙', 'good'); openSettings(); boot(); } catch (e) { out.innerHTML = `<span class="neg">${esc(e.message)}</span>`; } };
-  if ($('#aUp')) $('#aUp').onclick = async () => { const out = $('#aOut'); const pw = $('#aPw').value; if (pw.length < 8) { out.innerHTML = '<span class="neg">Use a password with 8+ characters.</span>'; return; } out.textContent = 'Creating your account…'; try { const d = await signUp($('#aEmail').value.trim(), pw); if (d.session) { CLOUD.session = d.session; await loadCloud(); await refreshConn(); openSettings(); boot(); } else out.innerHTML = '<span class="pos">Almost done: check your email and tap the confirm link, then come back here and tap Sign in.</span>'; } catch (e) { out.innerHTML = `<span class="neg">${esc(e.message)}</span>`; } };
+  if ($('#aIn')) $('#aIn').onclick = async () => { const out = $('#aOut'); out.textContent = 'Signing in…'; try { await signIn($('#aEmail').value.trim(), $('#aPw').value); toast('Signed in', 'Welcome back 🌙', 'good'); openSettings(); boot(); } catch (e) { out.innerHTML = `<span class="neg">${esc(authMsg(e))}</span>`; } };
+  if ($('#aUp')) $('#aUp').onclick = async () => { const out = $('#aOut'); const pw = $('#aPw').value; if (pw.length < 8) { out.innerHTML = '<span class="neg">Use a password with 8+ characters.</span>'; return; } out.textContent = 'Creating your account…'; try { const d = await signUp($('#aEmail').value.trim(), pw); if (d.session) { CLOUD.session = d.session; await loadCloud(); await refreshConn(); openSettings(); boot(); } else if (d.user && Array.isArray(d.user.identities) && d.user.identities.length === 0) out.innerHTML = `<span class="neg">${esc(authMsg('already registered'))}</span>`; else out.innerHTML = '<span class="pos">Almost done: check your email (and spam) and tap the confirm link ONE time. Don\'t tap Create account again, since that sends a new email and kills the old link.</span>'; } catch (e) { out.innerHTML = `<span class="neg">${esc(authMsg(e))}</span>`; } };
+  const needEmail = () => { const em = ($('#aEmail') || {}).value; if (!em || !em.includes('@')) { $('#aOut').innerHTML = '<span class="neg">Type your email above first.</span>'; return null; } return em.trim(); };
+  if ($('#aResend')) $('#aResend').onclick = async () => { const em = needEmail(); if (!em) return; $('#aOut').textContent = 'Sending…'; try { await resendConfirm(em); $('#aOut').innerHTML = '<span class="pos">Sent. Use only this newest email and tap the link once.</span>'; } catch (e) { $('#aOut').innerHTML = `<span class="neg">${esc(authMsg(e))}</span>`; } };
+  if ($('#aForgot')) $('#aForgot').onclick = async () => { const em = needEmail(); if (!em) return; $('#aOut').textContent = 'Sending…'; try { await sendReset(em); $('#aOut').innerHTML = '<span class="pos">Check your email for a reset link. It opens War Room so you can pick a new password.</span>'; } catch (e) { $('#aOut').innerHTML = `<span class="neg">${esc(authMsg(e))}</span>`; } };
+  if ($('#aSetPw')) $('#aSetPw').onclick = async () => { const pw = $('#aNewPw').value; if (pw.length < 8) { $('#aOut').innerHTML = '<span class="neg">Use 8+ characters.</span>'; return; } try { await setNewPassword(pw); toast('Password saved', 'You\'re signed in.', 'good'); await loadCloud(); await refreshConn(); openSettings(); boot(); } catch (e) { $('#aOut').innerHTML = `<span class="neg">${esc(authMsg(e))}</span>`; } };
   if ($('#aSignOut')) $('#aSignOut').onclick = async () => { await signOut(); toast('Signed out', 'See you soon.'); openSettings(); boot(); };
   $('#settings').classList.add('on');
 }
@@ -2131,7 +2152,11 @@ function init() {
   $('#tvLink').href = 'https://www.tradingview.com/chart/?symbol=COINBASE:' + CH.sym.replace('/', '');
   renderChat();
   setupHelp();
-  initCloud().catch(e => console.warn('cloud', e)).finally(() => { handleAlpacaReturn(); boot(); });
+  initCloud().catch(e => console.warn('cloud', e)).finally(() => {
+    handleAlpacaReturn(); boot();
+    if (CLOUD.recovery || CLOUD.linkErr) openSettings();
+    else if (cloudOn() && CLOUD.linkType === 'signup') { toast('Email confirmed ✓', 'You\'re signed in. Next: Connect Alpaca.', 'good'); openSettings(); }
+  });
   if (!LS.get('tourDone2', false)) setTimeout(startTour, 700);
 }
 document.addEventListener('DOMContentLoaded', init);
