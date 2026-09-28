@@ -501,6 +501,7 @@ details.adv summary{color:var(--muted);font-size:12px}
 </div>
 <div class="toasts" id="toasts"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 'use strict';
 /* ============================================================
@@ -512,7 +513,7 @@ const uniq = a => [...new Set(a)];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('wr_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem('wr_' + k, JSON.stringify(v)); } catch (e) {} }
+  set(k, v) { try { localStorage.setItem('wr_' + k, JSON.stringify(v)); } catch (e) {} if (k === 'settings' || k === 'tags' || k === 'plans') scheduleCloudSave(); }
 };
 const DEF = {
   mode: 'paper', paperKey: '', paperSecret: '', liveKey: '', liveSecret: '',
@@ -528,6 +529,86 @@ const saveS = () => LS.set('settings', S);
 let plans = LS.get('plans', []);
 let tags = LS.get('tags', {});
 let rulesFrozen = LS.get('frozen', null); // {date, mode}
+
+/* ---------------- account + cloud sync + secure Alpaca proxy ---------------- */
+const SB_URL = 'https://wcerjhiniqxdqseuujjm.supabase.co', SB_KEY = 'sb_publishable_9UNZOjidyOJYFjTSyY2jOA_Vbv3diFu';
+const CLOUD = { sb: null, session: null, conn: {}, ready: false, saveT: null };
+const cloudOn = () => !!(CLOUD.sb && CLOUD.session);
+const viaProxy = () => cloudOn() && !!CLOUD.conn[S.mode];
+async function initCloud() {
+  if (!window.supabase || SB_URL.startsWith('__')) return;
+  CLOUD.sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'wr_sb_auth' } });
+  const { data } = await CLOUD.sb.auth.getSession(); CLOUD.session = data.session;
+  CLOUD.sb.auth.onAuthStateChange((ev, sess) => { CLOUD.session = sess; if (ev === 'SIGNED_OUT') { CLOUD.conn = {}; CLOUD.ready = false; } });
+  if (CLOUD.session) { await loadCloud(); await refreshConn(); }
+}
+async function fnCall(action, extra = {}) {
+  const { data } = await CLOUD.sb.auth.getSession();
+  const r = await fetch(SB_URL + '/functions/v1/alpaca', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + ((data.session && data.session.access_token) || '') }, body: JSON.stringify({ action, ...extra }) });
+  const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j.error || ('Server error ' + r.status)); e.status = r.status; throw e; } return j;
+}
+async function refreshConn() { if (!cloudOn()) { CLOUD.conn = {}; return; } try { CLOUD.conn = (await fnCall('status')).connected || {}; } catch (e) { console.warn('conn', e); } }
+async function connectAlpaca(env) {
+  if (!cloudOn()) { openSettings(); return toast('Sign in first', 'Create your War Room login, then connect Alpaca.'); }
+  if (env === 'live' && !confirmLive()) return;
+  try { const j = await fnCall('connect', { env }); location.href = j.url; } catch (e) { toast('Could not start', e.message, 'bad'); }
+}
+function confirmLive() { toast('Live money', 'Connect paper first. Live connects the same way once you pass Level Up.'); return gradStatus().passed; }
+async function disconnectAlpaca(env) { try { await fnCall('disconnect', { env }); } catch (e) {} await refreshConn(); toast('Disconnected', `Alpaca ${env} unlinked from War Room.`); openSettings(); boot(); }
+let _pq = [], _pt = null;
+function proxyReq(api, path, o) {
+  return new Promise((res, rej) => {
+    let body; try { body = o.body ? JSON.parse(o.body) : undefined; } catch (e) { body = undefined; }
+    _pq.push({ q: { api, path, method: o.method || 'GET', body }, res, rej });
+    if (!_pt) _pt = setTimeout(flushProxy, 20);
+  });
+}
+async function flushProxy() {
+  const batch = _pq.splice(0, 10); _pt = _pq.length ? setTimeout(flushProxy, 20) : null;
+  try {
+    const { data } = await CLOUD.sb.auth.getSession();
+    const r = await fetch(SB_URL + '/functions/v1/alpaca', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: 'Bearer ' + ((data.session && data.session.access_token) || '') }, body: JSON.stringify({ action: 'call', env: S.mode, reqs: batch.map(b => b.q) }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { if (j.code === 'NOT_CONNECTED') CLOUD.conn[S.mode] = false; const e = new Error(`${r.status}: ${j.error || 'server error'}`); e.status = r.status; batch.forEach(b => b.rej(e)); return; }
+    batch.forEach((b, i) => { const x = (j.results || [])[i] || { status: 500, body: { message: 'no result' } }; if (x.status >= 200 && x.status < 300) b.res(x.body); else { const e = new Error(`${x.status}: ${(x.body && x.body.message) || 'error'}`); e.status = x.status; b.rej(e); } });
+  } catch (e) { batch.forEach(b => b.rej(e)); }
+}
+function cloudPayload() { const s = { ...S }; ['paperKey', 'paperSecret', 'liveKey', 'liveSecret', 'aiKey'].forEach(k => delete s[k]); return { settings: s, tags, plans: plans.slice(-300) }; }
+function scheduleCloudSave() {
+  if (typeof CLOUD === 'undefined' || !cloudOn() || !CLOUD.ready) return;
+  clearTimeout(CLOUD.saveT);
+  CLOUD.saveT = setTimeout(async () => { const { error } = await CLOUD.sb.from('user_data').upsert({ user_id: CLOUD.session.user.id, ...cloudPayload(), updated_at: new Date().toISOString() }); if (error) console.warn('cloud save', error); }, 1500);
+}
+async function loadCloud() {
+  CLOUD.ready = false;
+  const { data, error } = await CLOUD.sb.from('user_data').select('*').eq('user_id', CLOUD.session.user.id).maybeSingle();
+  if (!error && data) {
+    const local = { paperKey: S.paperKey, paperSecret: S.paperSecret, liveKey: S.liveKey, liveSecret: S.liveSecret, aiKey: S.aiKey };
+    S = Object.assign({}, DEF, data.settings || {}, local); LS.set('settings', S);
+    tags = Object.assign({}, data.tags || {}, tags); LS.set('tags', tags);
+    const ids = new Set(plans.map(p => p.id)); plans = [...(data.plans || []).filter(p => !ids.has(p.id)), ...plans].sort((x, y) => x.time - y.time).slice(-500); LS.set('plans', plans);
+  }
+  CLOUD.ready = true; scheduleCloudSave();
+}
+async function signIn(email, pw) { const { data, error } = await CLOUD.sb.auth.signInWithPassword({ email, password: pw }); if (error) throw error; CLOUD.session = data.session; await loadCloud(); await refreshConn(); }
+async function signUp(email, pw) { const { data, error } = await CLOUD.sb.auth.signUp({ email, password: pw, options: { emailRedirectTo: location.origin + location.pathname } }); if (error) throw error; return data; }
+async function signOut() { try { await CLOUD.sb.auth.signOut(); } catch (e) {} CLOUD.session = null; CLOUD.conn = {}; CLOUD.ready = false; }
+function handleAlpacaReturn() {
+  const p = new URLSearchParams(location.search); const r = p.get('alpaca'); if (!r) return;
+  history.replaceState(null, '', location.pathname);
+  if (r === 'connected') toast('Alpaca connected ✓', cloudOn() ? `Your ${p.get('env') || 'paper'} account is linked. No keys needed, ever.` : 'Linked! If you started in the home-screen app, go back to it and it will pick this up.', 'good');
+  else toast('Alpaca connection failed', p.get('msg') || 'Try Connect again.', 'bad');
+}
+function accountHtml() {
+  if (!CLOUD.sb) return `<p class="small muted" style="margin-top:0">Accounts aren't switched on yet.</p>`;
+  if (!cloudOn()) return `<p class="small" style="margin-top:0">Sign in once and your settings, journal and Alpaca connection follow you to every device. No more pasting keys.</p>
+    <div class="fg"><label class="f">Email<input id="aEmail" type="email" autocomplete="email" autocapitalize="off"></label><label class="f">Password<input id="aPw" type="password" autocomplete="current-password"></label></div>
+    <div class="row" style="margin-top:8px"><button class="btn go" id="aIn">Sign in</button><button class="btn sm" id="aUp">Create account</button></div><div class="small" id="aOut" style="margin-top:6px"></div><p class="small muted" style="margin-bottom:0">By creating an account you agree to the <a href="terms.html" target="_blank">Terms</a> and <a href="privacy.html" target="_blank">Privacy Policy</a>. Not financial advice.</p>`;
+  const row = env => `<div class="row" style="margin:6px 0"><span class="tag ${CLOUD.conn[env] ? 'win' : ''}">${env.toUpperCase()}</span><span class="small">${CLOUD.conn[env] ? '✓ Alpaca connected' : 'Not connected'}</span><div class="spacer"></div>${CLOUD.conn[env] ? `<button class="btn sm" onclick="disconnectAlpaca('${env}')">Disconnect</button>` : `<button class="btn sm ${env === 'paper' ? 'go' : ''}" onclick="connectAlpaca('${env}')">Connect ${env}</button>`}</div>`;
+  return `<div class="row"><span class="small">Signed in as <b>${esc(CLOUD.session.user.email)}</b></span><div class="spacer"></div><button class="btn sm" id="aSignOut">Sign out</button></div>
+    ${row('paper')}${row('live')}
+    <p class="small muted">Connect takes you to Alpaca's own page to approve. War Room never sees your Alpaca password or keys, the connection is stored encrypted on the server, and you can revoke it anytime in Alpaca.</p>`;
+}
 const ST = {
   account: null, positions: [], orders: [], clock: null, conn: null,
   an: {}, inPlay: [], news: {}, setups: [], trips: [], fillsOk: false,
@@ -607,7 +688,7 @@ function cryptoSession() {
 const tradeBase = () => S.mode === 'live' ? 'https://api.alpaca.markets' : 'https://paper-api.alpaca.markets';
 const DATA = 'https://data.alpaca.markets';
 const keys = () => S.mode === 'live' ? [S.liveKey, S.liveSecret] : [S.paperKey, S.paperSecret];
-const hasKeys = () => { const k = keys(); return !!(k[0] && k[1]); };
+const hasKeys = () => { if (viaProxy()) return true; const k = keys(); return !!(k[0] && k[1]); };
 const authH = () => { const k = keys(); return k[0] ? { 'APCA-API-KEY-ID': k[0], 'APCA-API-SECRET-KEY': k[1] } : {}; };
 async function req(url, opt = {}, auth = true) {
   const r = await fetch(url, { ...opt, headers: { ...(auth ? authH() : {}), ...(opt.body ? { 'Content-Type': 'application/json' } : {}), ...(opt.headers || {}) } });
@@ -619,8 +700,8 @@ async function req(url, opt = {}, auth = true) {
   if (r.status === 204) return null;
   const tx = await r.text(); return tx ? JSON.parse(tx) : null;
 }
-const api = (p, o) => req(tradeBase() + p, o);
-const dapi = (p, auth = true) => req(DATA + p, {}, auth);
+const api = (p, o = {}) => viaProxy() ? proxyReq('trade', p, o) : req(tradeBase() + p, o);
+const dapi = (p, auth = true) => (auth && viaProxy()) ? proxyReq('data', p, {}) : req(DATA + p, {}, auth);
 
 async function stockBars(syms, tf, start) {
   const out = {}; let token = null, g = 0;
@@ -638,7 +719,7 @@ async function cryptoBars(syms, tf, start) {
   do {
     const q = new URLSearchParams({ symbols: syms.join(','), timeframe: tf, start, limit: '10000', sort: 'asc' });
     if (token) q.set('page_token', token);
-    const j = await dapi('/v1beta3/crypto/us/bars?' + q, hasKeys());
+    const j = await dapi('/v1beta3/crypto/us/bars?' + q, hasKeys() && !viaProxy());
     for (const [s, a] of Object.entries(j.bars || {})) (out[s] = out[s] || []).push(...a);
     token = j.next_page_token;
   } while (token && ++g < 20);
@@ -1019,14 +1100,12 @@ function trendScore(A) { if (!A || A.vwNow == null) return 0; const ab = A.last 
 function renderDock() {
   const ob = $('#onboard');
   if (!hasKeys()) {
-    ob.innerHTML = `<div class="card" style="margin-bottom:14px;border-color:var(--lime)">
+    ob.innerHTML = CLOUD.sb ? `<div class="card" style="margin-bottom:14px;border-color:var(--lime)">
+      <h2>✨ ${cloudOn() ? 'Connect your Alpaca account' : 'Sign in to War Room'}</h2>
+      <p class="lede" style="margin-top:0">${cloudOn() ? "One tap sends you to Alpaca's own page to approve. No keys to copy, and it follows you to every device." : 'Crypto charts and setups already work. Sign in (or create your account) to trade, keep your journal, and use it on every device.'}</p>
+      <button class="btn go" onclick="${cloudOn() ? "connectAlpaca('paper')" : 'openSettings()'}">${cloudOn() ? '🔌 Connect Alpaca (paper)' : 'Sign in / Create account'}</button></div>` : `<div class="card" style="margin-bottom:14px;border-color:var(--lime)">
       <h2>✨ Connect your Alpaca account</h2>
       <p class="lede" style="margin-top:0">Crypto charts and setups already work. Stocks, scanning, placing trades and your journal need your Alpaca API keys. Start with <b>paper</b> keys.</p>
-      <ol class="steps small">
-        <li>Log in at <a href="https://app.alpaca.markets" target="_blank" rel="noopener">app.alpaca.markets</a> and switch to your <b>Paper</b> account (top-left account switcher).</li>
-        <li>On the home page find <b>API Keys</b>, then tap <b>Generate New Keys</b>. Copy the Key and the Secret (the secret only shows once).</li>
-        <li>Tap ⚙ up top, paste them into Paper Key / Paper Secret, and hit Save.</li>
-      </ol>
       <button class="btn go" onclick="openSettings()">Open Settings</button></div>`;
   } else ob.innerHTML = '';
 
@@ -1755,11 +1834,14 @@ function openSettings() {
   const g = guard(); const fr = g.frozen;
   const gs = gradStatus();
   $('#setBody').innerHTML = `
+    <div class="sub" style="margin-bottom:6px">War Room account</div>
+    ${accountHtml()}
+    <div class="hr"></div>
     <div class="sub" style="margin-bottom:6px">Account mode</div>
     <div class="seg" id="setMode"><button data-m="paper" class="${S.mode === 'paper' ? 'on long' : ''}">Paper</button><button data-m="live" class="${S.mode === 'live' ? 'on short' : ''}">Live money</button></div>
     <div id="liveGate"></div>
     <div class="hr"></div>
-    <div class="sub" style="margin-bottom:6px">Alpaca API keys (stored only on this device)</div>
+    <details ${CLOUD.sb ? '' : 'open'}><summary>Advanced: paste Alpaca API keys manually (this device only)</summary>
     <div class="fg">
       <label class="f">Paper key<input id="sPK" value="${esc(S.paperKey)}" autocomplete="off" autocapitalize="off"></label>
       <label class="f">Paper secret<input id="sPS" type="password" value="${esc(S.paperSecret)}" autocomplete="off"></label>
@@ -1767,6 +1849,7 @@ function openSettings() {
       <label class="f">Live secret<input id="sLS" type="password" value="${esc(S.liveSecret)}" autocomplete="off"></label>
     </div>
     <div class="row" style="margin-top:8px"><button class="btn sm" id="sTest">Test connection</button><span class="small" id="sTestOut"></span></div>
+    </details>
     <div class="hr"></div>
     <div class="sub" style="margin-bottom:6px">Risk rules ${fr ? '<span class="tag loss">frozen today, you hit a lock</span>' : ''}</div>
     <div class="fg">
@@ -1825,6 +1908,9 @@ function openSettings() {
   };
   $('#sWipe').onclick = e => { const b = e.target; if (!b.dataset.armed) { b.dataset.armed = 1; b.textContent = 'Tap again: wipes keys, journal tags, plans'; return; } try { Object.keys(localStorage).filter(k => k.startsWith('wr_')).forEach(k => localStorage.removeItem(k)); } catch (err) {} location.reload(); };
   $('#sTour').onclick = () => { closeSettings(); startTour(); };
+  if ($('#aIn')) $('#aIn').onclick = async () => { const out = $('#aOut'); out.textContent = 'Signing in…'; try { await signIn($('#aEmail').value.trim(), $('#aPw').value); toast('Signed in', 'Welcome back 🌙', 'good'); openSettings(); boot(); } catch (e) { out.innerHTML = `<span class="neg">${esc(e.message)}</span>`; } };
+  if ($('#aUp')) $('#aUp').onclick = async () => { const out = $('#aOut'); const pw = $('#aPw').value; if (pw.length < 8) { out.innerHTML = '<span class="neg">Use a password with 8+ characters.</span>'; return; } out.textContent = 'Creating your account…'; try { const d = await signUp($('#aEmail').value.trim(), pw); if (d.session) { CLOUD.session = d.session; await loadCloud(); await refreshConn(); openSettings(); boot(); } else out.innerHTML = '<span class="pos">Almost done: check your email and tap the confirm link, then come back here and tap Sign in.</span>'; } catch (e) { out.innerHTML = `<span class="neg">${esc(e.message)}</span>`; } };
+  if ($('#aSignOut')) $('#aSignOut').onclick = async () => { await signOut(); toast('Signed out', 'See you soon.'); openSettings(); boot(); };
   $('#settings').classList.add('on');
 }
 function closeSettings() { $('#settings').classList.remove('on'); }
@@ -2038,14 +2124,14 @@ function init() {
   document.addEventListener('pointerdown', unlockAudio, { once: false, passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
   document.addEventListener('click', e => { const s = $('#sheet'); if (!s || s.dataset.kind === 'tour' || !document.body.contains(e.target) || s.contains(e.target) || e.target.closest('.gobtn,.qm,.cks button,#settings')) return; closeSheet(); });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickAccount(); if (Date.now() - ST.lastScan > 50000) scan(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (cloudOn()) refreshConn().then(() => { renderDock(); tickAccount(); }); tickAccount(); if (Date.now() - ST.lastScan > 50000) scan(); } });
   chartEvents();
   CH.sym = S.crypto[0] || 'BTC/USD';
   $('#symIn').value = CH.sym;
   $('#tvLink').href = 'https://www.tradingview.com/chart/?symbol=COINBASE:' + CH.sym.replace('/', '');
   renderChat();
   setupHelp();
-  boot();
+  initCloud().catch(e => console.warn('cloud', e)).finally(() => { handleAlpacaReturn(); boot(); });
   if (!LS.get('tourDone2', false)) setTimeout(startTour, 700);
 }
 document.addEventListener('DOMContentLoaded', init);
