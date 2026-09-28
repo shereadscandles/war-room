@@ -293,6 +293,9 @@ details.adv summary{color:var(--muted);font-size:12px}
 .sheet h3{padding-right:36px}
 .sheet.gosheet .shx{top:10px;right:10px}
 
+body:not(.pro) .adv-only{display:none!important}
+body.pro .basic-only{display:none}
+
 </style>
 </head><body>
 <header class="top">
@@ -369,22 +372,23 @@ details.adv summary{color:var(--muted);font-size:12px}
           <h2>🚦 Go-Time Tracker <span class="r">buys · live</span></h2>
           <p class="small muted" style="margin-top:0">Every coin gets 5 checkpoints. Watch them light up green. All 5 lit = GO TIME.</p>
           <div id="ckList"></div>
+          <p class="small muted basic-only" style="margin-bottom:0">That's all you need here. (The raw signal list and replays are hidden. Turn on <b>Pro view</b> in ⚙ if you ever want them.)</p>
         </div>
-        <div class="card">
+        <div class="card adv-only">
           <h2>📡 All Signals (advanced) <span class="r" id="scanTime"></span></h2>
           <div class="tabs" id="radarFilter" style="margin-bottom:10px">
             <button data-f="all" class="on">All</button><button data-f="crypto">Crypto</button><button data-f="stock">Stocks</button><button data-f="AB">A/B only</button>
           </div>
           <div id="radarLive"></div>
         </div>
-        <div class="card" style="margin-top:14px">
+        <div class="card adv-only" style="margin-top:14px">
           <h2>🕯 Earlier Setups (practice replay)</h2>
           <p class="small muted" style="margin-top:0">These already played out. Tap one to see it on the chart and study what happened.</p>
           <div id="radarPast"></div>
         </div>
       </div>
       <div class="grid" style="align-content:start">
-        <div class="card">
+        <div class="card adv-only">
           <h2>🏆 Setup Scoreboard <span class="r">last few days · your list</span></h2>
           <p class="small muted" style="margin-top:0">Every setup the scanner found, run forward bar-by-bar: stop hit first = LOSS (−1R), target hit first = WIN (+2R). This shows which setups are actually paying on the names you watch.</p>
           <div id="scoreboard"></div>
@@ -516,7 +520,7 @@ const LS = {
   set(k, v) { try { localStorage.setItem('wr_' + k, JSON.stringify(v)); } catch (e) {} if (k === 'settings' || k === 'tags' || k === 'plans') scheduleCloudSave(); }
 };
 const DEF = {
-  mode: 'paper', paperKey: '', paperSecret: '', liveKey: '', liveSecret: '',
+  mode: 'paper', pro: false, paperKey: '', paperSecret: '', liveKey: '', liveSecret: '',
   riskPerTrade: 25, maxDailyLoss: 100, maxTrades: 6, cooldownMin: 20,
   watch: ['SPY', 'QQQ', 'NVDA', 'TSLA', 'AMD', 'AAPL', 'F'],
   crypto: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'DOGE/USD', 'XRP/USD', 'AVAX/USD', 'LINK/USD'],
@@ -557,6 +561,18 @@ async function connectAlpaca(env) {
   if (env === 'live' && !confirmLive()) return;
   try { const j = await fnCall('connect', { env }); location.href = j.url; } catch (e) { toast('Could not start', e.message, 'bad'); }
 }
+async function saveKeys(env, key, secret, outId) {
+  const out = $('#' + outId); if (out) out.textContent = 'Checking with Alpaca…';
+  try {
+    await fnCall('savekeys', { env, key: String(key || '').trim(), secret: String(secret || '').trim() });
+    if (env === 'live') { S.liveKey = ''; S.liveSecret = ''; } else { S.paperKey = ''; S.paperSecret = ''; }
+    LS.set('settings', S); await refreshConn();
+    toast('Alpaca keys saved ✓', `Your ${env} account is linked to your login. No more pasting keys on any device.`, 'good');
+    openSettings(); boot();
+  } catch (e) { if (out) out.innerHTML = `<span class="neg">${esc(e.message)}</span>`; }
+}
+function saveKeysFromDevice(env) { const k = env === 'live' ? [S.liveKey, S.liveSecret] : [S.paperKey, S.paperSecret]; saveKeys(env, k[0], k[1], 'kOut_' + env); }
+function saveKeysTyped(env) { saveKeys(env, ($('#kK_' + env) || {}).value, ($('#kS_' + env) || {}).value, 'kOut_' + env); }
 function confirmLive() { toast('Live money', 'Connect paper first. Live connects the same way once you pass Level Up.'); return gradStatus().passed; }
 async function disconnectAlpaca(env) { try { await fnCall('disconnect', { env }); } catch (e) {} await refreshConn(); toast('Disconnected', `Alpaca ${env} unlinked from War Room.`); openSettings(); boot(); }
 let _pq = [], _pt = null;
@@ -621,10 +637,19 @@ function accountHtml() {
   if (!cloudOn()) return `${CLOUD.linkErr ? `<p class="small neg" style="margin-top:0">${esc(CLOUD.linkErr)}</p>` : ''}<p class="small" style="margin-top:0">Sign in once and your settings, journal and Alpaca connection follow you to every device. No more pasting keys.</p>
     <div class="fg"><label class="f">Email<input id="aEmail" type="email" autocomplete="email" autocapitalize="off"></label><label class="f">Password<input id="aPw" type="password" autocomplete="current-password"></label></div>
     <div class="row" style="margin-top:8px"><button class="btn go" id="aIn">Sign in</button><button class="btn sm" id="aUp">Create account</button></div><div class="row" style="margin-top:6px"><button class="btn sm" id="aResend">Resend confirm email</button><button class="btn sm" id="aForgot">Forgot password</button></div><div class="small" id="aOut" style="margin-top:6px"></div><p class="small muted" style="margin-bottom:0">By creating an account you agree to the <a href="terms.html" target="_blank">Terms</a> and <a href="privacy.html" target="_blank">Privacy Policy</a>. Not financial advice.</p>`;
-  const row = env => `<div class="row" style="margin:6px 0"><span class="tag ${CLOUD.conn[env] ? 'win' : ''}">${env.toUpperCase()}</span><span class="small">${CLOUD.conn[env] ? '✓ Alpaca connected' : 'Not connected'}</span><div class="spacer"></div>${CLOUD.conn[env] ? `<button class="btn sm" onclick="disconnectAlpaca('${env}')">Disconnect</button>` : `<button class="btn sm ${env === 'paper' ? 'go' : ''}" onclick="connectAlpaca('${env}')">Connect ${env}</button>`}</div>`;
+  const lk = env => env === 'live' ? [S.liveKey, S.liveSecret] : [S.paperKey, S.paperSecret];
+  const row = env => {
+    if (CLOUD.conn[env]) return `<div class="row" style="margin:6px 0"><span class="tag win">${env.toUpperCase()}</span><span class="small">✓ Alpaca keys saved to your account</span><div class="spacer"></div><button class="btn sm" onclick="disconnectAlpaca('${env}')">Remove</button></div>`;
+    if (env === 'live' && !gradStatus().passed) return `<div class="row" style="margin:6px 0"><span class="tag">LIVE</span><span class="small muted">Unlocks after you pass Level Up in the Journal</span></div>`;
+    const k = lk(env), has = !!(k[0] && k[1]);
+    return `<div style="margin:8px 0"><div class="row"><span class="tag">${env.toUpperCase()}</span><span class="small">Not saved yet</span></div>
+      ${has ? `<button class="btn go" style="margin-top:6px" onclick="saveKeysFromDevice('${env}')">Save this device's ${env} keys to my account</button>` : ''}
+      <div class="fg" style="margin-top:6px"><label class="f">${env === 'live' ? 'Live' : 'Paper'} API key<input id="kK_${env}" autocomplete="off" autocapitalize="off" spellcheck="false"></label><label class="f">${env === 'live' ? 'Live' : 'Paper'} secret<input id="kS_${env}" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label></div>
+      <button class="btn ${has ? 'sm' : 'go'}" style="margin-top:6px" onclick="saveKeysTyped('${env}')">Save ${env} keys to my account</button><div class="small" id="kOut_${env}" style="margin-top:4px"></div></div>`;
+  };
   return `<div class="row"><span class="small">Signed in as <b>${esc(CLOUD.session.user.email)}</b></span><div class="spacer"></div><button class="btn sm" id="aSignOut">Sign out</button></div>
     ${row('paper')}${row('live')}
-    <p class="small muted">Connect takes you to Alpaca's own page to approve. War Room never sees your Alpaca password or keys, the connection is stored encrypted on the server, and you can revoke it anytime in Alpaca.</p>`;
+    <p class="small muted">Paste your keys once. War Room checks them with Alpaca, then locks them (encrypted) on the server. The app can never read them back, and every device you sign into just works. Get paper keys at app.alpaca.markets → Paper account → API Keys → Generate.</p>`;
 }
 const ST = {
   account: null, positions: [], orders: [], clock: null, conn: null,
@@ -747,7 +772,15 @@ const pb = b => ({ t: Math.floor(Date.parse(b.t) / 1000), o: +b.o, h: +b.h, l: +
 
 /* ---------------- indicators ---------------- */
 function emaArr(vals, n) { const k = 2 / (n + 1); const o = []; let e; vals.forEach((v, i) => { e = i === 0 ? v : v * k + e * (1 - k); o.push(e); }); return o; }
-function avgVolArr(B, n = 20) { const o = []; let s = 0; for (let i = 0; i < B.length; i++) { o.push(i >= n ? s / n : (i ? s / i : B[0].v)); s += B[i].v; if (i >= n) s -= B[i - n].v; } return o; }
+function avgVolArr(B, n = 20, L = 288) {
+  const o = []; let s = 0, sl = 0;
+  for (let i = 0; i < B.length; i++) {
+    const short = i >= n ? s / n : (i ? s / i : B[0].v), long = i >= L ? sl / L : (i ? sl / i : B[0].v);
+    o.push(Math.max(short, long * 0.25, 1e-9));
+    s += B[i].v; if (i >= n) s -= B[i - n].v; sl += B[i].v; if (i >= L) sl -= B[i - L].v;
+  }
+  return o;
+}
 // VWAP resetting whenever anchorKey(bar) changes; bars where anchorKey returns null get null
 function vwapArr(B, anchorKey) {
   const o = []; let k0 = undefined, pv = 0, vv = 0;
@@ -788,8 +821,8 @@ function detect(B, VW, E9, E20, AV, Lf, opt) {
     last[key] = i;
     const tgt = side === 'long' ? e + 2 * risk : e - 2 * risk;
     let score = 0; const why = [...why0];
-    const rv = AV[i] ? B[i].v / AV[i] : 1;
-    if (rv >= 1.3) { score++; why.push(`Volume ${rv.toFixed(1)}× normal`); } else why.push(`!Weak volume (${rv.toFixed(1)}×)`);
+    const rv = Math.min(AV[i] ? B[i].v / AV[i] : 1, 20);
+    if (rv >= 1.3) { score++; why.push(rv >= 20 ? 'Volume 20×+ normal' : `Volume ${rv.toFixed(1)}× normal`); } else why.push(`!Weak volume (${rv.toFixed(1)}×)`);
     const withV = VW[i] == null ? null : (side === 'long' ? e > VW[i] : e < VW[i]);
     if (withV) { score++; why.push(side === 'long' ? 'Above VWAP' : 'Below VWAP'); } else if (withV === false) why.push('!Fighting VWAP');
     const al = opt.align ? opt.align(B[i].t, side) : null;
@@ -1118,9 +1151,9 @@ function renderDock() {
   const ob = $('#onboard');
   if (!hasKeys()) {
     ob.innerHTML = CLOUD.sb ? `<div class="card" style="margin-bottom:14px;border-color:var(--lime)">
-      <h2>✨ ${cloudOn() ? 'Connect your Alpaca account' : 'Sign in to War Room'}</h2>
-      <p class="lede" style="margin-top:0">${cloudOn() ? "One tap sends you to Alpaca's own page to approve. No keys to copy, and it follows you to every device." : 'Crypto charts and setups already work. Sign in (or create your account) to trade, keep your journal, and use it on every device.'}</p>
-      <button class="btn go" onclick="${cloudOn() ? "connectAlpaca('paper')" : 'openSettings()'}">${cloudOn() ? '🔌 Connect Alpaca (paper)' : 'Sign in / Create account'}</button></div>` : `<div class="card" style="margin-bottom:14px;border-color:var(--lime)">
+      <h2>✨ ${cloudOn() ? 'Save your Alpaca keys' : 'Sign in to War Room'}</h2>
+      <p class="lede" style="margin-top:0">${cloudOn() ? 'Paste your paper keys one time. They get locked to your account, so every device just works.' : 'Crypto charts and setups already work. Sign in (or create your account) to trade, keep your journal, and use it on every device.'}</p>
+      <button class="btn go" onclick="openSettings()">${cloudOn() ? '🔑 Add my Alpaca keys' : 'Sign in / Create account'}</button></div>` : `<div class="card" style="margin-bottom:14px;border-color:var(--lime)">
       <h2>✨ Connect your Alpaca account</h2>
       <p class="lede" style="margin-top:0">Crypto charts and setups already work. Stocks, scanning, placing trades and your journal need your Alpaca API keys. Start with <b>paper</b> keys.</p>
       <button class="btn go" onclick="openSettings()">Open Settings</button></div>`;
@@ -1884,7 +1917,8 @@ function openSettings() {
     <div class="fg" style="margin-top:8px"><label class="f">In-play min price<input id="sMin" value="${S.minPrice}"></label><label class="f">In-play max price<input id="sMax" value="${S.maxPrice}"></label></div>
     <div class="hr"></div>
     <div class="sub" style="margin-bottom:6px">Alerts</div>
-    <label class="row small"><input type="checkbox" id="sSnd" ${S.sound ? 'checked' : ''}> Sound chimes</label>
+    <label class="row small"><input type="checkbox" id="sPro" ${S.pro ? 'checked' : ''}> Pro view: show the raw signal list, replays and scoreboard on Radar</label>
+    <label class="row small" style="margin-top:6px"><input type="checkbox" id="sSnd" ${S.sound ? 'checked' : ''}> Sound chimes</label>
     <label class="row small" style="margin-top:6px"><input type="checkbox" id="sNot" ${S.notify ? 'checked' : ''}> Notifications when the app's in the background</label>
     <p class="small muted">On iPhone, notifications only work once the app is added to your Home Screen (Share → Add to Home Screen), and only while it's still running. Push alerts with the app fully closed come in phase 2.</p>
     <div class="hr"></div>
@@ -1913,7 +1947,7 @@ function openSettings() {
       mode, paperKey: $('#sPK').value.trim(), paperSecret: $('#sPS').value.trim(), liveKey: $('#sLK').value.trim(), liveSecret: $('#sLS').value.trim(),
       watch: uniq($('#sW').value.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(s => /^[A-Z.]{1,6}$/.test(s))),
       crypto: uniq($('#sC').value.split(/[\s,]+/).map(s => toPair(s.trim())).filter(s => /^[A-Z0-9]{2,8}\/USD$/.test(s))),
-      minPrice: num('#sMin', 2), maxPrice: num('#sMax', 400), sound: $('#sSnd').checked, notify: $('#sNot').checked,
+      minPrice: num('#sMin', 2), maxPrice: num('#sMax', 400), sound: $('#sSnd').checked, pro: $('#sPro').checked, notify: $('#sNot').checked,
       aiKey: $('#sAI').value.trim(), aiModel: $('#sAIM').value.trim() || 'claude-sonnet-5'
     });
     if (!S.crypto.length) S.crypto = DEF.crypto.slice();
@@ -2113,7 +2147,9 @@ function go(v) {
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 }
 let timers = [];
+function applyPro() { document.body.classList.toggle('pro', !!S.pro); }
 async function boot() {
+  applyPro();
   timers.forEach(clearInterval); timers = [];
   setConn(false); renderGuard(); renderSession(); renderDock(); renderRadar(); renderPositions(); renderOrders();
   $('#quickSyms').innerHTML = uniq([...S.crypto.slice(0, 4), 'SPY', 'QQQ', ...S.watch.slice(0, 4)]).map(s => `<button class="btn sm" onclick="setChartSym('${s}')">${s.replace('/USD', '')}</button>`).join('');
@@ -2155,7 +2191,7 @@ function init() {
   initCloud().catch(e => console.warn('cloud', e)).finally(() => {
     handleAlpacaReturn(); boot();
     if (CLOUD.recovery || CLOUD.linkErr) openSettings();
-    else if (cloudOn() && CLOUD.linkType === 'signup') { toast('Email confirmed ✓', 'You\'re signed in. Next: Connect Alpaca.', 'good'); openSettings(); }
+    else if (cloudOn() && CLOUD.linkType === 'signup') { toast('Email confirmed ✓', 'You\'re signed in. Next: add your Alpaca keys.', 'good'); openSettings(); }
   });
   if (!LS.get('tourDone2', false)) setTimeout(startTour, 700);
 }
