@@ -283,6 +283,15 @@ details.adv summary{color:var(--muted);font-size:12px}
 .riskbox .rsub2{font-size:12.5px;color:var(--muted);margin-top:8px;line-height:1.45;text-align:left}
 .atrisk{font-size:13px;font-weight:600;margin-top:8px;padding:7px 10px;border-radius:10px;background:rgba(233,9,124,.1);border:1px solid rgba(233,9,124,.35)}
 .atrisk.safe{background:rgba(163,255,103,.08);border-color:rgba(163,255,103,.35)}
+/* go sheet: scrolling body + always-visible buy footer */
+.sheet.gosheet{padding:0;display:flex;flex-direction:column;overflow:hidden;max-height:min(84vh,860px);top:auto}
+.gosheet .gbody{overflow-y:auto;padding:16px 16px 8px;min-height:0}
+.gosheet .gfoot{padding:10px 16px 14px;border-top:1px solid var(--line2);background:rgba(22,18,40,.99)}
+.gosheet .gfoot .warnbox{margin:0 0 8px}
+@media(min-width:900px){.sheet.gosheet{bottom:auto;top:50%;transform:translate(-50%,-50%);max-height:88vh}}
+.shx{position:absolute;top:8px;right:8px;width:32px;height:32px;border-radius:50%;border:1px solid var(--line2);background:rgba(20,20,20,.7);color:var(--text);font-size:15px;cursor:pointer;z-index:2;display:grid;place-items:center;padding:0}
+.sheet h3{padding-right:36px}
+.sheet.gosheet .shx{top:10px;right:10px}
 
 </style>
 </head><body>
@@ -1339,6 +1348,7 @@ function tkCalc() {
   const stop = +TK.stop, tgt = +TK.target, riskD = +TK.risk;
   const out = { crypto, entry, stop, tgt, errs: [], warns: [] };
   if (!TK.sym) { out.errs.push('Pick a symbol.'); return out; }
+  if (!hasKeys()) out.errs.push('Connect your Alpaca paper account first. Tap here, then paste your paper keys.');
   if (!entry) out.errs.push('No price yet.');
   if (!stop) out.errs.push('Set a stop. No stop, no trade.');
   if (!tgt) out.errs.push('Set a target.');
@@ -1368,7 +1378,6 @@ function tkCalc() {
   if (!crypto && ph.k === 'close') out.errs.push('Too close to the bell for a new day trade.');
   if (!TK.whyTags.length) out.errs.push("Tap at least one reason you're taking it.");
   else if (!TK.whyTags.includes('practice')) { const real = TK.whyTags.length; if (real < 3) out.warns.push(`Only ${real} reason${real === 1 ? '' : 's'}. Pros usually want 3 or more before they pull the trigger.`); }
-  if (!TK.mood) out.errs.push('Pick your mood.');
   if (BAD_MOODS.includes(TK.mood)) out.warns.push(`You picked ${TK.mood}. Most blown-up trades start right here. Are you sure?`);
   const g = guard();
   if (g.locked) { if (S.mode === 'live') out.errs.push('🔒 ' + g.reasons[0].t); else if (!TK.override) out.errs.push('🔒 ' + g.reasons[0].t + ' (paper: tick override to practice anyway)'); }
@@ -1426,10 +1435,13 @@ function updateTicketCalc() {
     ${c.crypto && c.fee ? `<div class="small muted">Est. Alpaca crypto fees ~${f$(c.fee)} round trip (0.25% taker, check your tier). Reward at target: ${f$(c.rewardD)}.</div>` : ''}`;
   $('#tkMsgs').innerHTML = c.errs.map(e => `<div class="warnbox">${esc(e)}</div>`).join('') + c.warns.map(w => `<div class="infobox">${esc(w)}</div>`).join('') +
     (!c.errs.length && !c.warns.length ? `<div class="okbox">✓ Clean ticket. Risking ${f$(c.riskD)} to make ${f$(c.rewardD)}.</div>` : '');
-  const b = $('#tkSend'); b.disabled = c.errs.length > 0 || TK.busy;
+  const b = $('#tkSend'); b.disabled = (c.errs.length > 0 && hasKeys()) || TK.busy;
+  if (!hasKeys()) { b.textContent = '🔌 Connect Alpaca first (tap here)'; return; }
+  if (c.errs.length && !TK.busy) { b.textContent = '⛔ ' + c.errs[0]; return; }
   b.textContent = TK.busy ? 'Sending…' : `${S.mode === 'live' ? '⚠ LIVE · ' : ''}${c.crypto ? 'Buy' : TK.side === 'long' ? 'Buy' : 'Short'} ${c.qty || ''} ${TK.sym}${c.riskD ? ' · risk ' + f$(c.riskD) : ''}`;
 }
 async function sendTicket(skipArm) {
+  if (!hasKeys()) { closeSheet(); openSettings(); toast('Connect Alpaca', 'Paste your PAPER key and secret, tap Test connection, then Save.'); return; }
   const c = tkCalc(); if (c.errs.length || TK.busy) return;
   const b = $('#tkSend');
   if (!skipArm && b && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = `Tap again: yes, risk ${f$(c.riskD)}`; setTimeout(() => { if (b) { delete b.dataset.armed; updateTicketCalc(); } }, 3500); return; }
@@ -1739,6 +1751,7 @@ function renderChat() {
 
 /* ---------------- settings ---------------- */
 function openSettings() {
+  closeSheet();
   const g = guard(); const fr = g.frozen;
   const gs = gradStatus();
   $('#setBody').innerHTML = `
@@ -1900,18 +1913,24 @@ function planLines(c) {
 function renderGo() {
   const c = tkCalc();
   const ready = !c.errs.length;
-  const el = showSheet(`<h3>🚀 GO TIME · ${esc(TK.sym.replace('/USD', ''))}</h3>
+  const noKeys = !hasKeys();
+  const el = showSheet(`<div class="gbody"><h3>🚀 GO TIME · ${esc(TK.sym.replace('/USD', ''))}</h3>
     <p class="small muted" style="margin:0 0 6px">All 5 checkpoints are lit (${esc(TK.setup)}). Here's the whole trade:</p>
     ${planLines(c)}
-    <div class="f" style="margin-top:10px"><label class="f">How are you feeling?</label><div class="chips" id="goMood">${MOODS.map(m => `<button data-m="${m}" class="${TK.mood === m ? 'on' + (BAD_MOODS.includes(m) ? ' bad' : '') : ''}">${m}</button>`).join('')}</div></div>
-    <div>${c.errs.filter(e => !/mood/i.test(e)).map(e => `<div class="warnbox">${esc(e)}</div>`).join('')}${c.warns.map(w => `<div class="infobox">${esc(w)}</div>`).join('')}</div>
-    <button class="gobtn${ready ? ' ready' : ''}" id="goBuy" style="margin-top:8px">${S.mode === 'live' ? '⚠ LIVE · ' : ''}RISK ${f$(c.riskD)} · BUY${S.mode === 'paper' ? ' (PAPER)' : ''}</button>
-    <div class="row" style="margin-top:8px"><button class="btn sm" onclick="closeSheet()">Not now</button><div class="spacer"></div><button class="btn sm" id="goAdv">Advanced</button></div>`);
-  el.classList.add('tour');
-  $$('#goMood button').forEach(x => x.onclick = () => { TK.mood = x.dataset.m; renderGo(); });
+    ${c.warns.map(w => `<div class="infobox">${esc(w)}</div>`).join('')}
+    <div class="f" style="margin-top:10px"><label class="f">How are you feeling? (optional, it helps your journal)</label><div class="chips" id="goMood">${MOODS.map(m => `<button data-m="${m}" class="${TK.mood === m ? 'on' + (BAD_MOODS.includes(m) ? ' bad' : '') : ''}">${m}</button>`).join('')}</div></div></div>
+    <div class="gfoot">
+      ${noKeys ? `<div class="warnbox">🔌 This device isn't connected to Alpaca yet, so it can't place trades.</div>` : c.errs.map(e => `<div class="warnbox">⛔ ${esc(e)}</div>`).join('')}
+      <button class="gobtn ready" id="goBuy">${noKeys ? '🔌 CONNECT ALPACA' : `${S.mode === 'live' ? '⚠ LIVE · ' : ''}RISK ${f$(c.riskD)} · BUY${S.mode === 'paper' ? ' (PAPER)' : ''}`}</button>
+      <div class="row" style="margin-top:8px"><button class="btn sm" onclick="closeSheet()">Not now</button><div class="spacer"></div><button class="btn sm" id="goAdv">Advanced</button></div>
+    </div>`);
+  el.classList.add('tour', 'gosheet');
+  if (!ready && !noKeys) { const b = $('#goBuy'); b.classList.remove('ready'); }
+  $$('#goMood button').forEach(x => x.onclick = () => { TK.mood = TK.mood === x.dataset.m ? null : x.dataset.m; renderGo(); });
   const btn = $('#goBuy');
   btn.onclick = async () => {
-    if (!ready) return toast('Almost', TK.mood ? 'Fix the item above first.' : "Tap how you're feeling first.");
+    if (noKeys) { closeSheet(); openSettings(); toast('Connect Alpaca', 'Paste your PAPER key and secret, tap Test connection, then Save. Then tap GO TIME again.'); return; }
+    if (!ready) return toast("Can't buy yet", c.errs[0]);
     if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.textContent = `TAP AGAIN: YES, RISK ${f$(c.riskD)}`; return; }
     const before = TK.lastOk, sym = TK.sym; btn.textContent = 'Buying…';
     await sendTicket(true);
@@ -1941,7 +1960,7 @@ const HELP = {
   'Homework': ['Nightly practice', 'Short tasks picked from your own data. 20 minutes a night adds up fast.'],
   'Ask the War Room': ['Chat coach', 'Ask about anything on your screen. Needs an Anthropic API key in Settings.']
 };
-function showSheet(html) { closeSheet(); const el = document.createElement('div'); el.className = 'sheet'; el.id = 'sheet'; el.innerHTML = html; document.body.appendChild(el); return el; }
+function showSheet(html) { closeSheet(); const el = document.createElement('div'); el.className = 'sheet'; el.id = 'sheet'; el.innerHTML = '<button class="shx" aria-label="Close" onclick="closeSheet()">✕</button>' + html; document.body.appendChild(el); return el; }
 function closeSheet() { const s = $('#sheet'); if (s) s.remove(); }
 function setupHelp() {
   $$('.card h2').forEach(h => {
@@ -1968,7 +1987,7 @@ function renderTour() {
   const last = tourI === TOUR.length - 1;
   const el = showSheet(`<div class="dots">${TOUR.map((_, i) => `<i class="${i <= tourI ? 'on' : ''}"></i>`).join('')}</div><h3>${s.t}</h3><p>${s.b}</p>
     <div class="row">${tourI ? '<button class="btn sm" id="tBack">Back</button>' : ''}<div class="spacer"></div>${last ? '' : '<button class="btn sm" id="tSkip">Skip</button>'}<button class="btn pri" id="tNext">${last ? "Let's go" : 'Next'}</button></div>`);
-  el.classList.add('tour');
+  el.classList.add('tour'); el.dataset.kind = 'tour';
   if ($('#tBack')) $('#tBack').onclick = () => { tourI--; renderTour(); };
   if ($('#tSkip')) $('#tSkip').onclick = endTour;
   $('#tNext').onclick = () => { if (last) endTour(); else { tourI++; renderTour(); } };
@@ -2017,6 +2036,8 @@ function init() {
   $('#askIn').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask($('#askIn').value); } };
   $$('#quick button').forEach(b => b.onclick = () => ask(b.textContent));
   document.addEventListener('pointerdown', unlockAudio, { once: false, passive: true });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+  document.addEventListener('click', e => { const s = $('#sheet'); if (!s || s.dataset.kind === 'tour' || !document.body.contains(e.target) || s.contains(e.target) || e.target.closest('.gobtn,.qm,.cks button,#settings')) return; closeSheet(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickAccount(); if (Date.now() - ST.lastScan > 50000) scan(); } });
   chartEvents();
   CH.sym = S.crypto[0] || 'BTC/USD';
