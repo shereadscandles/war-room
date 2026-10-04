@@ -296,6 +296,16 @@ details.adv summary{color:var(--muted);font-size:12px}
 body:not(.pro) .adv-only{display:none!important}
 body.pro .basic-only{display:none}
 
+.bot{margin-bottom:14px}
+.bot.on{border-color:var(--lime);box-shadow:0 0 0 1px var(--lime),0 0 24px rgba(155,225,93,.18)}
+.botrow{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line,rgba(255,255,255,.08));cursor:pointer}
+.botrow input{width:26px;height:26px;flex:none;accent-color:var(--lime)}
+.botsetup{background:rgba(255,255,255,.04);border-radius:12px;padding:10px 12px;margin:0 0 8px}
+.botsetup .topic{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+.botsetup code{font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,.35);padding:4px 8px;border-radius:8px;word-break:break-all}
+.botlog{margin-top:10px;font-size:13px;line-height:1.5;max-height:220px;overflow:auto}
+.botlog>div{padding:4px 0;border-top:1px solid rgba(255,255,255,.06)}
+
 </style>
 </head><body>
 <header class="top">
@@ -321,6 +331,7 @@ body.pro .basic-only{display:none}
   <!-- DOCK -->
   <section class="view on" id="v-dock">
     <div id="onboard"></div>
+    <div id="botCard"></div>
     <div class="grid split">
       <div class="grid">
         <div class="card">
@@ -523,7 +534,7 @@ const DEF = {
   mode: 'paper', pro: false, paperKey: '', paperSecret: '', liveKey: '', liveSecret: '',
   riskPerTrade: 25, maxDailyLoss: 100, maxTrades: 6, cooldownMin: 20,
   watch: ['SPY', 'QQQ', 'NVDA', 'TSLA', 'AMD', 'AAPL', 'F'],
-  crypto: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'DOGE/USD', 'XRP/USD', 'AVAX/USD', 'LINK/USD'],
+  crypto: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'HYPE/USD', 'DOGE/USD', 'XRP/USD', 'AVAX/USD', 'LINK/USD'],
   minPrice: 2, maxPrice: 400, sound: true, notify: false,
   aiKey: '', aiModel: 'claude-sonnet-5'
 };
@@ -651,6 +662,76 @@ function accountHtml() {
     ${row('paper')}${row('live')}
     <p class="small muted">Paste your keys once. War Room checks them with Alpaca, then locks them (encrypted) on the server. The app can never read them back, and every device you sign into just works. Get paper keys at app.alpaca.markets → Paper account → API Keys → Generate.</p>`;
 }
+
+/* ---------------- Autopilot: 24/7 server bot (alerts + paper auto-trading) ---------------- */
+const BOT = { cfg: null, events: [], open: [], loaded: false };
+const NTFY_APP = 'https://apps.apple.com/us/app/ntfy/id1625396347';
+async function loadBot() {
+  if (!cloudOn()) { BOT.loaded = false; return; }
+  const uid = CLOUD.session.user.id;
+  const [c, e, t] = await Promise.all([
+    CLOUD.sb.from('bot_settings').select('*').eq('user_id', uid).maybeSingle(),
+    CLOUD.sb.from('bot_events').select('*').eq('user_id', uid).order('created_at', { ascending: false }).limit(12),
+    CLOUD.sb.from('bot_trades').select('*').eq('user_id', uid).eq('status', 'open')
+  ]);
+  BOT.cfg = c.data || null; BOT.events = (e.data || []).filter(x => x.kind !== 'go' || !(BOT.cfg && BOT.cfg.autotrade)); BOT.open = t.data || []; BOT.loaded = !c.error;
+}
+async function saveBot(patch) {
+  const uid = CLOUD.session.user.id;
+  const cur = BOT.cfg || { user_id: uid, alerts: false, autotrade: false, ntfy_topic: null, risk: S.riskPerTrade || 25, max_trades: 3, max_daily_loss: S.maxDailyLoss || 100 };
+  const next = { ...cur, ...patch, user_id: uid, updated_at: new Date().toISOString() };
+  if (next.alerts && !next.ntfy_topic) next.ntfy_topic = 'warroom-' + [...crypto.getRandomValues(new Uint8Array(10))].map(b => b.toString(16).padStart(2, '0')).join('');
+  const { error } = await CLOUD.sb.from('bot_settings').upsert(next);
+  if (error) { toast('Could not save', error.message, 'bad'); return false; }
+  BOT.cfg = next; return true;
+}
+async function testAlert() {
+  if (!BOT.cfg || !BOT.cfg.ntfy_topic) return;
+  try { await fetch('https://ntfy.sh/' + BOT.cfg.ntfy_topic, { method: 'POST', headers: { Title: '🌙 War Room test alert' }, body: 'If you see this, GO TIME alerts will reach your phone.' }); toast('Test sent', 'Check your phone. It should pop up within a few seconds.', 'good'); }
+  catch (e) { toast('Test failed', e.message, 'bad'); }
+}
+function copyTopic() { try { navigator.clipboard.writeText(BOT.cfg.ntfy_topic); toast('Copied', 'Paste it into ntfy.', 'good'); } catch (e) {} }
+async function toggleAlerts(on) { if (await saveBot({ alerts: on })) { renderBot(); if (on) toast('Phone alerts ON', 'Finish the 1-time ntfy setup below so they reach your phone.', 'good'); } }
+async function toggleAuto(on) {
+  if (on) {
+    if (!CLOUD.conn.paper) { toast('Save your keys first', 'Autopilot needs your Alpaca paper keys saved to your account (⚙).', 'bad'); openSettings(); return; }
+    const r = Math.max(1, +($('#botRisk') || {}).value || S.riskPerTrade || 25);
+    if (!(await saveBot({ autotrade: true, alerts: true, risk: r }))) return;
+    toast('Autopilot ON 🤖', `It will take GO TIME setups for you in PAPER, risking about $${r} each.`, 'good');
+  } else { if (await saveBot({ autotrade: false })) toast('Autopilot OFF', "The bot won't open new trades. Anything it already opened keeps its stop and target.", 'good'); }
+  renderBot();
+}
+async function saveBotLimits() {
+  const r = Math.max(1, Math.min(500, +$('#botRisk').value || 25)), m = Math.max(1, Math.min(20, Math.round(+$('#botMax').value || 3))), d = Math.max(1, +$('#botLoss').value || 100);
+  if (await saveBot({ risk: r, max_trades: m, max_daily_loss: d })) { toast('Saved', 'Autopilot limits updated.', 'good'); renderBot(); }
+}
+function botAgo(ts) { const m = Math.round((Date.now() - Date.parse(ts)) / 60000); return m < 1 ? 'now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago'; }
+function renderBot() {
+  const el = $('#botCard'); if (!el) return;
+  if (!CLOUD.sb) { el.innerHTML = ''; return; }
+  if (!cloudOn()) { el.innerHTML = `<div class="card bot"><h2>🤖 Autopilot &amp; phone alerts</h2><p class="small" style="margin-top:0">Sign in to get a phone alert the moment a coin hits GO TIME, even with the app closed, or let the bot trade them for you.</p><button class="btn go" onclick="openSettings()">Sign in</button></div>`; return; }
+  const c = BOT.cfg || {}, auto = !!c.autotrade, al = !!c.alerts;
+  const topic = c.ntfy_topic;
+  el.innerHTML = `<div class="card bot ${auto ? 'on' : ''}">
+    <h2>🤖 Autopilot &amp; phone alerts <span class="r">${auto ? '<span class="tag win">BOT TRADING · PAPER</span>' : al ? '<span class="tag">alerts on</span>' : ''}</span></h2>
+    <p class="small muted" style="margin-top:0">Runs on the server around the clock, checking your coins every 2 minutes. Your phone can be off.</p>
+    <label class="botrow"><span><b>📲 Phone alerts</b><br><span class="small muted">Ping me when a coin hits 5/5 GO TIME</span></span><input type="checkbox" ${al ? 'checked' : ''} onchange="toggleAlerts(this.checked)"></label>
+    ${al && topic ? `<div class="botsetup small"><b>One-time setup (2 min):</b><ol class="steps">
+      <li>Install the free <a href="${NTFY_APP}" target="_blank" rel="noopener">ntfy app</a> and allow notifications.</li>
+      <li>In ntfy tap <b>+</b>, then type this channel name exactly:<div class="topic"><code>${esc(topic)}</code><button class="btn sm" onclick="copyTopic()">Copy</button></div></li>
+      <li>Tap <b>Subscribe</b>, then <button class="btn sm" onclick="testAlert()">Send a test alert</button></li></ol>
+      <span class="muted">Keep that channel name private, since anyone with it could see your alerts.</span></div>` : ''}
+    <label class="botrow"><span><b>🤖 Autopilot (paper money only)</b><br><span class="small muted">The bot takes GO TIME setups for you: buys, sets the stop, sells at the target. Turn it off anytime and trade yourself.</span></span><input type="checkbox" ${auto ? 'checked' : ''} onchange="toggleAuto(this.checked)"></label>
+    ${!CLOUD.conn.paper ? `<p class="small neg" style="margin:4px 0 0">Autopilot needs your Alpaca paper keys saved to your account first: ⚙ → War Room account.</p>` : ''}
+    <details class="adv" ${auto ? '' : ''}><summary>Autopilot limits</summary>
+      <div class="fg" style="margin-top:8px"><label class="f">Risk per trade $<input id="botRisk" type="number" min="1" value="${c.risk || S.riskPerTrade || 25}"></label><label class="f">Max bot trades / day<input id="botMax" type="number" min="1" max="20" value="${c.max_trades || 3}"></label><label class="f">Stop for the day if down $<input id="botLoss" type="number" min="1" value="${c.max_daily_loss || S.maxDailyLoss || 100}"></label></div>
+      <button class="btn sm" style="margin-top:8px" onclick="saveBotLimits()">Save limits</button>
+      <p class="small muted">The bot only trades crypto on your list, one position per coin, and exits at the stop, at the target (2× risk), or after 4 hours. It never touches live money.</p></details>
+    ${BOT.open.length ? `<div class="small" style="margin-top:10px"><b>Bot is in:</b> ${BOT.open.map(t => `${esc(t.sym.replace('/USD', ''))} (in ${fp(+t.entry)}, stop ${fp(+t.stop)}, target ${fp(+t.target)})`).join(' · ')}</div>` : ''}
+    ${BOT.events.length ? `<div class="botlog">${BOT.events.slice(0, 8).map(e => `<div><span class="muted mono">${botAgo(e.created_at)}</span> ${esc(e.msg || e.kind)}</div>`).join('')}</div>` : `<p class="small muted" style="margin-bottom:0">${al || auto ? 'Watching… Activity shows up here.' : ''}</p>`}
+  </div>`;
+}
+async function refreshBot() { try { await loadBot(); } catch (e) { console.warn('bot', e); } renderBot(); }
 const ST = {
   account: null, positions: [], orders: [], clock: null, conn: null,
   an: {}, inPlay: [], news: {}, setups: [], trips: [], fillsOk: false,
@@ -2151,7 +2232,7 @@ function applyPro() { document.body.classList.toggle('pro', !!S.pro); }
 async function boot() {
   applyPro();
   timers.forEach(clearInterval); timers = [];
-  setConn(false); renderGuard(); renderSession(); renderDock(); renderRadar(); renderPositions(); renderOrders();
+  setConn(false); renderGuard(); renderSession(); renderDock(); refreshBot(); renderRadar(); renderPositions(); renderOrders();
   $('#quickSyms').innerHTML = uniq([...S.crypto.slice(0, 4), 'SPY', 'QQQ', ...S.watch.slice(0, 4)]).map(s => `<button class="btn sm" onclick="setChartSym('${s}')">${s.replace('/USD', '')}</button>`).join('');
   await tickAccount();
   await loadInPlay();
@@ -2165,6 +2246,7 @@ async function boot() {
   timers.push(setInterval(() => vis() && loadFills(), 60000));
   timers.push(setInterval(() => vis() && loadInPlay(), 300000));
   timers.push(setInterval(renderSession, 30000));
+  timers.push(setInterval(() => vis() && refreshBot(), 60000));
 }
 function init() {
   $$('#nav button').forEach(b => b.onclick = () => go(b.dataset.v));
