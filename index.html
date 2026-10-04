@@ -332,7 +332,6 @@ body.pro .basic-only{display:none}
   <!-- DOCK -->
   <section class="view on" id="v-dock">
     <div id="onboard"></div>
-    <div id="botCard"></div>
     <div class="grid split">
       <div class="grid">
         <div class="card">
@@ -731,11 +730,10 @@ function botAgo(ts) { const m = Math.round((Date.now() - Date.parse(ts)) / 60000
 function renderBot() {
   const el = $('#botCard'); if (!el) return;
   if (!CLOUD.sb) { el.innerHTML = ''; return; }
-  if (!cloudOn()) { el.innerHTML = `<div class="card bot"><h2>🤖 Autopilot &amp; phone alerts</h2><p class="small" style="margin-top:0">Sign in to get a phone alert the moment a coin hits GO TIME, even with the app closed, or let the bot trade them for you.</p><button class="btn go" onclick="openSettings()">Sign in</button></div>`; return; }
+  if (!cloudOn()) { el.innerHTML = `<p class="small muted" style="margin-top:0">Sign in above to get phone alerts and Autopilot.</p>`; return; }
   const c = BOT.cfg || {}, auto = !!c.autotrade, al = !!c.alerts;
   const needHome = IS_IOS && !IS_STANDALONE();
-  el.innerHTML = `<div class="card bot ${auto ? 'on' : ''}">
-    <h2>🤖 Autopilot &amp; phone alerts <span class="r">${auto ? '<span class="tag win">BOT TRADING · PAPER</span>' : al ? '<span class="tag">alerts on</span>' : ''}</span></h2>
+  el.innerHTML = `<div class="botset">
     <p class="small muted" style="margin-top:0">Runs on the server around the clock, checking your coins every 2 minutes. Your phone can be off.</p>
     <label class="botrow"><span><b>📲 Phone alerts</b><br><span class="small muted">A notification on this phone when a coin hits 5/5 GO TIME, even with the app closed. No extra app.</span></span><input type="checkbox" ${al ? 'checked' : ''} onchange="toggleAlerts(this.checked)"></label>
     ${needHome ? `<div class="botsetup small"><b>One step first:</b> iPhone only sends app alerts to apps on your Home Screen.<ol class="steps"><li>Tap the <b>Share</b> button (square with an arrow) in Safari.</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li><li>Open War Room from the new icon and turn alerts on there.</li></ol></div>` : ''}
@@ -1988,6 +1986,9 @@ function openSettings() {
     <div class="sub" style="margin-bottom:6px">War Room account</div>
     ${accountHtml()}
     <div class="hr"></div>
+    <div class="sub" style="margin-bottom:6px">Autopilot &amp; phone alerts</div>
+    <div id="botCard"></div>
+    <div class="hr"></div>
     <div class="sub" style="margin-bottom:6px">Account mode</div>
     <div class="seg" id="setMode"><button data-m="paper" class="${S.mode === 'paper' ? 'on long' : ''}">Paper</button><button data-m="live" class="${S.mode === 'live' ? 'on short' : ''}">Live money</button></div>
     <div id="liveGate"></div>
@@ -2068,6 +2069,7 @@ function openSettings() {
   if ($('#aSetPw')) $('#aSetPw').onclick = async () => { const pw = $('#aNewPw').value; if (pw.length < 8) { $('#aOut').innerHTML = '<span class="neg">Use 8+ characters.</span>'; return; } try { await setNewPassword(pw); toast('Password saved', 'You\'re signed in.', 'good'); await loadCloud(); await refreshConn(); openSettings(); boot(); } catch (e) { $('#aOut').innerHTML = `<span class="neg">${esc(authMsg(e))}</span>`; } };
   if ($('#aSignOut')) $('#aSignOut').onclick = async () => { await signOut(); toast('Signed out', 'See you soon.'); openSettings(); boot(); };
   $('#settings').classList.add('on');
+  renderBot(); refreshBot();
 }
 function closeSettings() { $('#settings').classList.remove('on'); }
 
