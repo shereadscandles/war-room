@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="War Room">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
@@ -665,7 +666,12 @@ function accountHtml() {
 
 /* ---------------- Autopilot: 24/7 server bot (alerts + paper auto-trading) ---------------- */
 const BOT = { cfg: null, events: [], open: [], loaded: false };
-const NTFY_APP = 'https://apps.apple.com/us/app/ntfy/id1625396347';
+const PUSH_OK = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const IS_STANDALONE = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const b64ToU8 = s => Uint8Array.from(atob((s + '==='.slice((s.length + 3) % 4)).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+async function swReg() { if (!('serviceWorker' in navigator)) return null; try { return await navigator.serviceWorker.register('sw.js'); } catch (e) { console.warn('sw', e); return null; } }
+async function deviceSub() { try { const r = await navigator.serviceWorker.getRegistration(); return r ? await r.pushManager.getSubscription() : null; } catch (e) { return null; } }
 async function loadBot() {
   if (!cloudOn()) { BOT.loaded = false; return; }
   const uid = CLOUD.session.user.id;
@@ -680,18 +686,34 @@ async function saveBot(patch) {
   const uid = CLOUD.session.user.id;
   const cur = BOT.cfg || { user_id: uid, alerts: false, autotrade: false, ntfy_topic: null, risk: S.riskPerTrade || 25, max_trades: 3, max_daily_loss: S.maxDailyLoss || 100 };
   const next = { ...cur, ...patch, user_id: uid, updated_at: new Date().toISOString() };
-  if (next.alerts && !next.ntfy_topic) next.ntfy_topic = 'warroom-' + [...crypto.getRandomValues(new Uint8Array(10))].map(b => b.toString(16).padStart(2, '0')).join('');
   const { error } = await CLOUD.sb.from('bot_settings').upsert(next);
   if (error) { toast('Could not save', error.message, 'bad'); return false; }
   BOT.cfg = next; return true;
 }
 async function testAlert() {
-  if (!BOT.cfg || !BOT.cfg.ntfy_topic) return;
-  try { await fetch('https://ntfy.sh/' + BOT.cfg.ntfy_topic, { method: 'POST', headers: { Title: '🌙 War Room test alert' }, body: 'If you see this, GO TIME alerts will reach your phone.' }); toast('Test sent', 'Check your phone. It should pop up within a few seconds.', 'good'); }
+  try { const j = await fnCall('pushtest'); toast('Test sent', `Check your ${j.sent > 1 ? 'devices' : 'phone'}. It should pop up in a few seconds.`, 'good'); }
   catch (e) { toast('Test failed', e.message, 'bad'); }
 }
-function copyTopic() { try { navigator.clipboard.writeText(BOT.cfg.ntfy_topic); toast('Copied', 'Paste it into ntfy.', 'good'); } catch (e) {} }
-async function toggleAlerts(on) { if (await saveBot({ alerts: on })) { renderBot(); if (on) toast('Phone alerts ON', 'Finish the 1-time ntfy setup below so they reach your phone.', 'good'); } }
+async function enablePush() {
+  // must start from a tap: iPhone only allows the permission prompt then
+  if (!PUSH_OK()) { toast('Not on this browser', IS_IOS ? 'Add War Room to your Home Screen first, then open it from the icon.' : 'This browser cannot do notifications.', 'bad'); return false; }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast('Notifications blocked', IS_IOS ? 'Turn them on in iPhone Settings → Notifications → War Room, then try again.' : 'Allow notifications for this site, then try again.', 'bad'); return false; }
+  try {
+    const reg = await swReg(); if (!reg) throw new Error('Could not start the alert service');
+    await navigator.serviceWorker.ready;
+    const { publicKey } = await fnCall('vapid');
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(publicKey) });
+    await fnCall('pushsub', { sub: sub.toJSON() });
+    BOT.deviceOn = true; return true;
+  } catch (e) { toast('Could not turn on alerts', e.message, 'bad'); return false; }
+}
+async function toggleAlerts(on) {
+  if (on) { if (!(await enablePush())) { renderBot(); return; } }
+  if (await saveBot({ alerts: on })) { renderBot(); if (on) { toast('Alerts ON 📲', 'Sending a test alert now…', 'good'); testAlert(); } }
+}
+async function addThisDevice() { if (await enablePush()) { toast('This device is on', 'Sending a test alert…', 'good'); testAlert(); renderBot(); } }
 async function toggleAuto(on) {
   if (on) {
     if (!CLOUD.conn.paper) { toast('Save your keys first', 'Autopilot needs your Alpaca paper keys saved to your account (⚙).', 'bad'); openSettings(); return; }
@@ -711,16 +733,14 @@ function renderBot() {
   if (!CLOUD.sb) { el.innerHTML = ''; return; }
   if (!cloudOn()) { el.innerHTML = `<div class="card bot"><h2>🤖 Autopilot &amp; phone alerts</h2><p class="small" style="margin-top:0">Sign in to get a phone alert the moment a coin hits GO TIME, even with the app closed, or let the bot trade them for you.</p><button class="btn go" onclick="openSettings()">Sign in</button></div>`; return; }
   const c = BOT.cfg || {}, auto = !!c.autotrade, al = !!c.alerts;
-  const topic = c.ntfy_topic;
+  const needHome = IS_IOS && !IS_STANDALONE();
   el.innerHTML = `<div class="card bot ${auto ? 'on' : ''}">
     <h2>🤖 Autopilot &amp; phone alerts <span class="r">${auto ? '<span class="tag win">BOT TRADING · PAPER</span>' : al ? '<span class="tag">alerts on</span>' : ''}</span></h2>
     <p class="small muted" style="margin-top:0">Runs on the server around the clock, checking your coins every 2 minutes. Your phone can be off.</p>
-    <label class="botrow"><span><b>📲 Phone alerts</b><br><span class="small muted">Ping me when a coin hits 5/5 GO TIME</span></span><input type="checkbox" ${al ? 'checked' : ''} onchange="toggleAlerts(this.checked)"></label>
-    ${al && topic ? `<div class="botsetup small"><b>One-time setup (2 min):</b><ol class="steps">
-      <li>Install the free <a href="${NTFY_APP}" target="_blank" rel="noopener">ntfy app</a> and allow notifications.</li>
-      <li>In ntfy tap <b>+</b>, then type this channel name exactly:<div class="topic"><code>${esc(topic)}</code><button class="btn sm" onclick="copyTopic()">Copy</button></div></li>
-      <li>Tap <b>Subscribe</b>, then <button class="btn sm" onclick="testAlert()">Send a test alert</button></li></ol>
-      <span class="muted">Keep that channel name private, since anyone with it could see your alerts.</span></div>` : ''}
+    <label class="botrow"><span><b>📲 Phone alerts</b><br><span class="small muted">A notification on this phone when a coin hits 5/5 GO TIME, even with the app closed. No extra app.</span></span><input type="checkbox" ${al ? 'checked' : ''} onchange="toggleAlerts(this.checked)"></label>
+    ${needHome ? `<div class="botsetup small"><b>One step first:</b> iPhone only sends app alerts to apps on your Home Screen.<ol class="steps"><li>Tap the <b>Share</b> button (square with an arrow) in Safari.</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li><li>Open War Room from the new icon and turn alerts on there.</li></ol></div>` : ''}
+    ${al && !BOT.deviceOn && !needHome ? `<div class="botsetup small">Alerts are on for your account, but not on this device yet. <button class="btn sm" onclick="addThisDevice()">Turn on for this device</button></div>` : ''}
+    ${al && BOT.deviceOn ? `<div class="row small" style="margin:0 0 6px"><span class="muted">This device gets alerts.</span><button class="btn sm" onclick="testAlert()">Send a test alert</button></div>` : ''}
     <label class="botrow"><span><b>🤖 Autopilot (paper money only)</b><br><span class="small muted">The bot takes GO TIME setups for you: buys, sets the stop, sells at the target. Turn it off anytime and trade yourself.</span></span><input type="checkbox" ${auto ? 'checked' : ''} onchange="toggleAuto(this.checked)"></label>
     ${!CLOUD.conn.paper ? `<p class="small neg" style="margin:4px 0 0">Autopilot needs your Alpaca paper keys saved to your account first: ⚙ → War Room account.</p>` : ''}
     <details class="adv" ${auto ? '' : ''}><summary>Autopilot limits</summary>
@@ -731,7 +751,7 @@ function renderBot() {
     ${BOT.events.length ? `<div class="botlog">${BOT.events.slice(0, 8).map(e => `<div><span class="muted mono">${botAgo(e.created_at)}</span> ${esc(e.msg || e.kind)}</div>`).join('')}</div>` : `<p class="small muted" style="margin-bottom:0">${al || auto ? 'Watching… Activity shows up here.' : ''}</p>`}
   </div>`;
 }
-async function refreshBot() { try { await loadBot(); } catch (e) { console.warn('bot', e); } renderBot(); }
+async function refreshBot() { try { await loadBot(); BOT.deviceOn = !!(await deviceSub()); } catch (e) { console.warn('bot', e); } renderBot(); }
 const ST = {
   account: null, positions: [], orders: [], clock: null, conn: null,
   an: {}, inPlay: [], news: {}, setups: [], trips: [], fillsOk: false,
