@@ -399,6 +399,11 @@ body.pro .basic-only{display:none}
         </div>
       </div>
       <div class="grid" style="align-content:start">
+        <div class="card">
+          <h2>🧪 What's Actually Working <span class="r">last 30 days · 5/5 trades</span></h2>
+          <p class="small muted" style="margin-top:0">The app re-tests every GO TIME setup on the last month of real prices, including fees. Setups that lost money get benched so GO TIME and Autopilot skip them.</p>
+          <div id="lab"></div>
+        </div>
         <div class="card adv-only">
           <h2>🏆 Setup Scoreboard <span class="r">last few days · your list</span></h2>
           <p class="small muted" style="margin-top:0">Every setup the scanner found, run forward bar-by-bar: stop hit first = LOSS (−1R), target hit first = WIN (+2R). This shows which setups are actually paying on the names you watch.</p>
@@ -948,7 +953,8 @@ function detect(B, VW, E9, E20, AV, Lf, opt) {
       const timedOut = opt.maxHold ? (i + opt.maxHold <= B.length - 1) : opt.closedDay;
       if (timedOut) { exitI = end; const lc = B[end].c; R = (side === 'long' ? lc - e : e - lc) / risk; res = 'TIME'; }
     }
-    out.push({ i, t: B[i].t, name, side, entry: e, stop, target: tgt, risk, grade, score, why, res, R, exitI, barsAgo: B.length - 1 - i });
+    const ck = { trend: E9[i] > E20[i], vwap: VW[i] != null && e > VW[i], rv2: Math.max(AV[i] ? B[i].v / AV[i] : 0, i && AV[i - 1] ? B[i - 1].v / AV[i - 1] : 0) };
+    out.push({ i, t: B[i].t, name, side, entry: e, stop, target: tgt, risk, grade, score, why, res, R, exitI, barsAgo: B.length - 1 - i, ck });
   };
   for (let i = 3; i < B.length; i++) {
     const b = B[i], p = B[i - 1], c = b.c, L = Lf(i);
@@ -983,6 +989,67 @@ function detect(B, VW, E9, E20, AV, Lf, opt) {
     }
   }
   return out;
+}
+
+
+/* ---------------- Strategy Lab: what actually made money lately (5/5 trades only, after fees) ---------------- */
+const CRYPTO_FEE = 0.0025; // Alpaca crypto taker fee per side
+const EDGE_MIN_N = 15, EDGE_MIN_R = 0.05, LAB_DAYS = 30;
+const isFive = x => x.side === 'long' && x.ck && x.ck.trend && x.ck.vwap && x.ck.rv2 >= 1.3 && x.why.some(w => /agrees$/.test(w) && !w.startsWith('!')) && !x.why.includes('!Move too small to beat fees');
+const feeR = x => x.crypto ? CRYPTO_FEE * (2 * x.entry + (x.R || 0) * x.risk) / x.risk : 0;
+const edgeKey = x => (x.crypto ? 'crypto' : 'stock') + '|' + x.name;
+function edgeAllowed(x) {
+  if (S.edgeFilter === false) return true;
+  const E = S.edge; if (!E || !E.allow) return true; // not measured yet: don't block
+  return E.allow.includes(edgeKey(x));
+}
+const LAB = { running: false, groups: null, err: null };
+async function runLab(force) {
+  if (LAB.running) return; if (!force && S.edge && Date.now() - (S.edge.at || 0) < 20 * 3600e3) { LAB.groups = S.edge.groups || null; renderLab(); return; }
+  LAB.running = true; LAB.err = null; renderLab();
+  try {
+    const trades = [];
+    for (const sym of S.crypto) { // one coin at a time so a long history can't get cut off
+      const raw = (await cryptoBars([sym], '5Min', isoAgo(LAB_DAYS)).catch(() => ({})))[sym] || [];
+      const A = baseCrypto(sym, raw); if (!A) continue; ST.labAn = ST.labAn || {}; ST.labAn[sym] = A;
+    }
+    const LA = ST.labAn || {}, cB = ctxMap(LA['BTC/USD']), cE = ctxMap(LA['ETH/USD']);
+    const goodTime = t => { const m = et(t).min; return (m >= 570 && m < 690) || (m >= 1200 && m < 1320) || (m >= 180 && m < 300); };
+    for (const [sym, A] of Object.entries(LA)) {
+      detect(A.bars, A.vw, A.e9, A.e20, A.av, A.lvAt, { crypto: true, align: alignFrom(sym === 'BTC/USD' ? cE : cB), alignLabel: sym === 'BTC/USD' ? 'ETH' : 'BTC', maxHold: 48, lookHOD: 144, goodTime })
+        .forEach(x => { x.crypto = true; x.sym = sym; if (isFive(x) && x.R != null && x.res !== 'OPEN') trades.push(x); });
+    }
+    if (hasKeys()) {
+      const syms = uniq(['SPY', 'QQQ', ...S.watch]);
+      const sb = await stockBars(syms, '5Min', isoAgo(LAB_DAYS)).catch(() => ({}));
+      const SA = {}; for (const s of syms) { const A = baseStock(s, sb[s] || []); if (A) SA[s] = A; }
+      const spy = ctxMap(SA.SPY), qqq = ctxMap(SA.QQQ);
+      for (const [s, A] of Object.entries(SA)) detectStock(A, s === 'SPY' ? qqq : spy).forEach(x => { if (isFive(x) && x.R != null && x.res !== 'OPEN') trades.push(x); });
+    }
+    const g = {};
+    trades.forEach(x => { const k = edgeKey(x); const r = x.R - feeR(x); (g[k] = g[k] || { k, market: x.crypto ? 'crypto' : 'stock', name: x.name, n: 0, w: 0, r: 0 }); g[k].n++; if (r > 0) g[k].w++; g[k].r += r; });
+    const groups = Object.values(g).map(x => ({ ...x, avg: x.r / x.n, on: x.n >= EDGE_MIN_N && x.r / x.n >= EDGE_MIN_R })).sort((a, b) => b.avg - a.avg);
+    const tot = m => { const xs = groups.filter(x => x.market === m); const n = xs.reduce((a, x) => a + x.n, 0), r = xs.reduce((a, x) => a + x.r, 0); return n ? { n, avg: r / n } : null; };
+    S.edge = { at: Date.now(), days: LAB_DAYS, allow: groups.filter(x => x.on).map(x => x.k), groups, crypto: tot('crypto'), stock: tot('stock') };
+    LS.set('settings', S); LAB.groups = groups;
+  } catch (e) { LAB.err = e.message; }
+  LAB.running = false; renderLab(); renderTracker();
+}
+function renderLab() {
+  const el = $('#lab'); if (!el) return;
+  const E = S.edge, risk = S.riskPerTrade || 25;
+  if (LAB.running) { el.innerHTML = `<p class="small muted">Testing the last ${LAB_DAYS} days of your coins and stocks… this takes about 20 seconds.</p>`; return; }
+  if (!E) { el.innerHTML = `<p class="small">Not tested yet.</p><button class="btn go" onclick="runLab(true)">Run the 30-day test</button>`; return; }
+  const money = r => { const d = r * risk; return (d >= 0 ? '+' : '−') + '$' + Math.abs(d).toFixed(2); };
+  const line = (m, label) => { const t = E[m]; if (!t) return `<p class="small muted">${label}: no 5/5 trades to test${m === 'stock' && !hasKeys() ? ' (needs your Alpaca keys)' : ''}.</p>`;
+    return `<p class="small" style="margin:6px 0"><b>${label}:</b> ${t.n} GO TIME trades. On average each one ${t.avg >= 0 ? 'made' : 'lost'} <b class="${cls(t.avg)}">${money(t.avg)}</b> per $${risk} risked${m === 'crypto' ? ', after fees' : ''}.</p>`; };
+  const rows = (E.groups || []).map(x => `<tr><td class="l">${x.on ? '✅' : '🪑'} ${esc(x.name)} <span class="tag">${x.market}</span></td><td>${x.n}</td><td>${Math.round(x.w / x.n * 100)}%</td><td class="${cls(x.avg)}">${money(x.avg)}</td></tr>`).join('');
+  el.innerHTML = `${line('crypto', 'Crypto')}${line('stock', 'Stocks')}
+    <p class="small" style="margin:8px 0">${E.allow.length ? `<b>Trading:</b> ${E.allow.map(k => esc(k.split('|')[1]) + ' (' + k.split('|')[0] + ')').join(', ')}. Everything else is benched 🪑.` : '<b>Nothing has been making money lately, so every setup is benched 🪑.</b> GO TIME and Autopilot will stay quiet until something proves itself. That protects you; it is not a bug.'}</p>
+    ${rows ? `<table class="t"><tr><th>Setup</th><th>#</th><th>Win%</th><th>Avg per trade</th></tr>${rows}</table>` : ''}
+    <p class="small muted">✅ = at least ${EDGE_MIN_N} trades and made money on average after fees. 🪑 = benched (losing, or not enough trades to trust). Re-tests itself daily. Tested ${new Date(E.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.</p>
+    <label class="row small"><input type="checkbox" ${S.edgeFilter === false ? '' : 'checked'} onchange="S.edgeFilter=this.checked;LS.set('settings',S);renderTracker();renderLab()"> Only fire GO TIME and Autopilot on ✅ setups (recommended)</label>
+    <button class="btn sm" style="margin-top:8px" onclick="runLab(true)">Re-test now</button>`;
 }
 
 /* market context maps: t -> {above, up} */
@@ -2081,7 +2148,8 @@ function checkpoints(sym) {
   const mName = crypto ? (sym === 'BTC/USD' ? 'ETH' : 'BTC') : (sym === 'SPY' ? 'QQQ' : 'SPY');
   const mkt = mA && mA.vwNow != null ? (mA.last > mA.vwNow && mA.e9Now > mA.e20Now) : false;
   const rv = Math.max(A.av[li] ? B[li].v / A.av[li] : 0, A.av[li - 1] ? B[li - 1].v / A.av[li - 1] : 0);
-  const trig = ST.setups.filter(s => s.sym === sym && s.side === 'long' && s.res === 'OPEN' && s.barsAgo <= 2 && s.stop < A.last && !s.why.includes('!Move too small to beat fees')).sort((x, y) => x.barsAgo - y.barsAgo)[0] || null;
+  const cands = ST.setups.filter(s => s.sym === sym && s.side === 'long' && s.res === 'OPEN' && s.barsAgo <= 2 && s.stop < A.last && !s.why.includes('!Move too small to beat fees')).sort((x, y) => x.barsAgo - y.barsAgo);
+  const trig = cands.find(edgeAllowed) || null, benched = !trig && cands[0] ? cands[0] : null;
   const checks = [
     { k: 'trend', label: 'Trend up', tip: "The chart has been climbing. The fast moving average (9 EMA, the lime line on the chart) is above the slow one (20 EMA). You want to buy things that are already going up, not fight a drop.", ok: A.e9Now > A.e20Now },
     { k: 'vwap', label: 'Above VWAP', tip: "VWAP (the blue line on the chart) is today's average price. When price is above it, buyers are winning today. Buying below it means fighting the sellers.", ok: A.last > A.vwNow },
@@ -2089,7 +2157,7 @@ function checkpoints(sym) {
     { k: 'volume', label: 'Volume', tip: 'More trading than normal right now (at least 1.3× usual). Big volume means real money is pushing the move, so it is less likely to be a fake-out.', ok: rv >= 1.3 },
     { k: 'trigger', label: 'Trigger', tip: "The actual entry signal: a breakout above a level, a bounce off the average, or price pushing back above VWAP. The other 4 say the conditions are good. This one says <b>now</b>." + (trig ? `<br><br>Firing right now: <b>${esc(trig.name)}</b>.` : ''), ok: !!trig }
   ];
-  return { sym, crypto, A, checks, lit: checks.filter(x => x.ok).length, trig, closed: !crypto && !marketOpen() };
+  return { sym, crypto, A, checks, lit: checks.filter(x => x.ok).length, trig, benched, closed: !crypto && !marketOpen() };
 }
 function trackerList() {
   const syms = uniq([...S.crypto, ...(hasKeys() ? S.watch.filter(s => !['SPY', 'QQQ'].includes(s)) : [])]);
@@ -2098,7 +2166,7 @@ function trackerList() {
 function ckCard(ck) {
   const miss = ck.checks.filter(x => !x.ok).map(x => x.label);
   const go5 = ck.lit === 5 && !ck.closed;
-  const msg = ck.closed ? 'Stock market is closed. These go live at 9:30am ET.' : go5 ? `All 5 lit (${esc(ck.trig.name)}). The odds lean your way.` : ck.lit === 4 ? `Almost. Waiting on: <b>${esc(miss.join(', '))}</b>` : `Waiting on: ${esc(miss.join(', '))}`;
+  const msg = ck.closed ? 'Stock market is closed. These go live at 9:30am ET.' : go5 ? `All 5 lit (${esc(ck.trig.name)}). The odds lean your way.` : (ck.lit === 4 ? `Almost. Waiting on: <b>${esc(miss.join(', '))}</b>` : `Waiting on: ${esc(miss.join(', '))}`) + (ck.benched ? `<br><span class="muted">A ${esc(ck.benched.name)} trigger fired, but that setup has been losing lately, so it's benched 🪑.</span>` : '');
   return `<div class="ck l${ck.closed ? 0 : ck.lit}"><div class="hd"><span class="sym">${esc(ck.sym.replace('/USD', ''))}</span><span class="mono small muted">${fp(ck.A.last)}</span><span class="cnt">${ck.closed ? 'closed' : ck.lit + '/5'}</span></div>
     <div class="cks">${ck.checks.map((x, i) => `<button class="${x.ok && !ck.closed ? 'on' : ''}" onclick="ckTip('${ck.sym}',${i})"><i></i>${esc(x.label)}</button>`).join('')}</div>
     <div class="ckmsg">${msg}</div>
@@ -2259,6 +2327,7 @@ async function boot() {
   await tickAccount();
   await loadInPlay();
   await scan();
+  runLab(false);
   loadFills();
   if (!CH.bars.length || CH.sym) loadChart(true);
   const vis = () => !document.hidden;
