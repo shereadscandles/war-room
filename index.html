@@ -307,6 +307,13 @@ body.pro .basic-only{display:none}
 .botlog{margin-top:10px;font-size:13px;line-height:1.5;max-height:220px;overflow:auto}
 .botlog>div{padding:4px 0;border-top:1px solid rgba(255,255,255,.06)}
 
+.botstrip{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;margin:0 0 14px;padding:10px 14px;border-radius:14px;border:1px solid var(--line,rgba(255,255,255,.12));background:rgba(255,255,255,.04);color:inherit;font:inherit;cursor:pointer}
+.botstrip.ok{border-color:var(--lime)}
+.botstrip.warn{border-color:var(--gold)}
+.botstrip .bs1{font-size:15px}
+.botstrip .bs2{font-size:14px;opacity:.85}
+.botlog{font-size:15px!important;line-height:1.55}
+
 </style>
 </head><body>
 <header class="top">
@@ -332,6 +339,7 @@ body.pro .basic-only{display:none}
   <!-- DOCK -->
   <section class="view on" id="v-dock">
     <div id="onboard"></div>
+    <div id="botStrip"></div>
     <div class="grid split">
       <div class="grid">
         <div class="card">
@@ -681,8 +689,8 @@ async function loadBot() {
   const uid = CLOUD.session.user.id;
   const [c, e, t] = await Promise.all([
     CLOUD.sb.from('bot_settings').select('*').eq('user_id', uid).maybeSingle(),
-    CLOUD.sb.from('bot_events').select('*').eq('user_id', uid).order('created_at', { ascending: false }).limit(12),
-    CLOUD.sb.from('bot_trades').select('*').eq('user_id', uid).eq('status', 'open')
+    CLOUD.sb.from('bot_events').select('*').eq('user_id', uid).eq('archived', false).order('created_at', { ascending: false }).limit(12),
+    CLOUD.sb.from('bot_trades').select('*').eq('user_id', uid).eq('archived', false).eq('status', 'open')
   ]);
   BOT.cfg = c.data || null; BOT.events = (e.data || []).filter(x => x.kind !== 'go' || !(BOT.cfg && BOT.cfg.autotrade)); BOT.open = t.data || []; BOT.loaded = !c.error;
 }
@@ -754,7 +762,17 @@ function renderBot() {
     ${BOT.events.length ? `<div class="botlog">${BOT.events.slice(0, 8).map(e => `<div><span class="muted mono">${botAgo(e.created_at)}</span> ${esc(e.msg || e.kind)}</div>`).join('')}</div>` : `<p class="small muted" style="margin-bottom:0">${al || auto ? 'Watching… Activity shows up here.' : ''}</p>`}
   </div>`;
 }
-async function refreshBot() { try { await loadBot(); BOT.deviceOn = !!(await deviceSub()); } catch (e) { console.warn('bot', e); } renderBot(); }
+async function refreshBot() { try { await loadBot(); BOT.deviceOn = !!(await deviceSub()); } catch (e) { console.warn('bot', e); } renderBot(); renderBotStrip(); }
+function renderBotStrip() {
+  const el = $('#botStrip'); if (!el) return;
+  if (!cloudOn() || !BOT.cfg || (!BOT.cfg.autotrade && !BOT.cfg.alerts)) { el.innerHTML = ''; return; }
+  const c = BOT.cfg, ago = c.last_run ? botAgo(c.last_run) : null, fresh = c.last_run && Date.now() - Date.parse(c.last_run) < 6 * 60000;
+  const today = (BOT.events || []).filter(e => e.kind === 'buy' && Date.now() - Date.parse(e.created_at) < 864e5).length;
+  const status = !c.last_run ? 'Waiting for its first check…' : fresh ? `Working ✓ · checked ${ago}` : `⚠ Hasn't checked since ${ago}`;
+  el.innerHTML = `<button class="botstrip ${fresh ? 'ok' : c.last_run ? 'warn' : ''}" onclick="openSettings()">
+    <span class="bs1">${c.autotrade ? '🤖 Autopilot ON' : '📲 Alerts ON'} · <b>${status}</b></span>
+    <span class="bs2">${esc(c.last_note || 'It checks every 2 minutes, even with the app closed.')}${c.autotrade ? ` · Bot trades today: <b>${today}</b>` : ''}</span></button>`;
+}
 const ST = {
   account: null, positions: [], orders: [], clock: null, conn: null,
   an: {}, inPlay: [], news: {}, setups: [], trips: [], fillsOk: false,
