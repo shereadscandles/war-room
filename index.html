@@ -313,6 +313,16 @@ body.pro .basic-only{display:none}
 .botstrip .bs1{font-size:15px}
 .botstrip .bs2{font-size:14px;opacity:.85}
 .botlog{font-size:15px!important;line-height:1.55}
+/* Daily Plays */
+.playgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:760px){.playgrid{grid-template-columns:1fr}}
+.playrow{border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:8px;background:rgba(20,20,20,.35)}
+.playrow .ps{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+.playrow .ps b{font-size:16px;letter-spacing:.5px}
+.playrow .ps .mono{font-family:var(--mono);font-weight:700}
+.playrow .ps .small{margin-left:auto}
+.playrow .pp{font-size:14px;margin:3px 0}
+.playhow{font-size:14px;padding:8px 0;border-top:1px solid var(--line);display:grid;gap:2px}
 
 </style>
 </head><body>
@@ -340,6 +350,10 @@ body.pro .basic-only{display:none}
   <section class="view on" id="v-dock">
     <div id="onboard"></div>
     <div id="botStrip"></div>
+    <div class="card" id="playsCard" style="margin-bottom:14px">
+      <h2>🎯 Daily Plays <span class="r">proven strategies · stocks + crypto</span></h2>
+      <div id="plays"></div>
+    </div>
     <div class="grid split">
       <div class="grid">
         <div class="card">
@@ -353,6 +367,7 @@ body.pro .basic-only{display:none}
         </div>
         <div class="card">
           <h2>🔥 Stocks In Play <span class="r" id="inplayNote"></span></h2>
+          <p class="small muted" style="margin-top:0">Sorted by opening volume. Pros focus on the 1–3 stocks trading way above normal at the open (🔥 2×+): in the research, that filter did almost all the work. Still practice only until the Lab shows it winning.</p>
           <div class="plans" id="stockPlans"></div>
         </div>
       </div>
@@ -362,7 +377,7 @@ body.pro .basic-only{display:none}
           <div id="clockCard"></div>
         </div>
         <div class="card">
-          <h2>🚦 Closest to Go Time</h2>
+          <h2>🚦 Closest to Go Time <span class="r">5-min · practice</span></h2>
           <div id="dockSetups"></div>
           <button class="btn block" data-go="radar">Open the Radar →</button>
         </div>
@@ -548,7 +563,7 @@ const DEF = {
   riskPerTrade: 25, maxDailyLoss: 100, maxTrades: 6, cooldownMin: 20,
   watch: ['SPY', 'QQQ', 'NVDA', 'TSLA', 'AMD', 'AAPL', 'F'],
   crypto: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'HYPE/USD', 'DOGE/USD', 'XRP/USD', 'AVAX/USD', 'LINK/USD'],
-  minPrice: 2, maxPrice: 400, sound: true, notify: false,
+  minPrice: 2, maxPrice: 400, sound: true, notify: false, playPct: 10, playMax: 6,
   aiKey: '', aiModel: 'claude-sonnet-5'
 };
 let S = Object.assign({}, DEF, LS.get('settings', {}));
@@ -731,11 +746,12 @@ async function toggleAuto(on) {
     if (!CLOUD.conn.paper) { toast('Save your keys first', 'Autopilot needs your Alpaca paper keys saved to your account (⚙).', 'bad'); openSettings(); return; }
     const r = Math.max(1, +($('#botRisk') || {}).value || S.riskPerTrade || 25);
     if (!(await saveBot({ autotrade: true, alerts: true, risk: r }))) return;
-    toast('Autopilot ON 🤖', `It will take GO TIME setups for you in PAPER, risking about $${r} each.`, 'good');
-  } else { if (await saveBot({ autotrade: false })) toast('Autopilot OFF', "The bot won't open new trades. Anything it already opened keeps its stop and target.", 'good'); }
+    toast('Autopilot ON 🤖', `It will take the Daily Plays for you in PAPER, ${S.playPct || 10}% of your account each, with a safety stop.`, 'good');
+  } else { if (await saveBot({ autotrade: false })) toast('Autopilot OFF', "The bot won't open new trades. Anything it already holds keeps its safety stop.", 'good'); }
   renderBot();
 }
 async function saveBotLimits() {
+  S.playPct = Math.max(1, Math.min(25, +($('#playPct') || {}).value || 10)); S.playMax = Math.max(1, Math.min(10, Math.round(+($('#playMax') || {}).value || 6))); LS.set('settings', S);
   const r = Math.max(1, Math.min(500, +$('#botRisk').value || 25)), m = Math.max(1, Math.min(20, Math.round(+$('#botMax').value || 3))), d = Math.max(1, +$('#botLoss').value || 100);
   if (await saveBot({ risk: r, max_trades: m, max_daily_loss: d })) { toast('Saved', 'Autopilot limits updated.', 'good'); renderBot(); }
 }
@@ -748,21 +764,21 @@ function renderBot() {
   const needHome = IS_IOS && !IS_STANDALONE();
   el.innerHTML = `<div class="botset">
     <p class="small muted" style="margin-top:0">Runs on the server around the clock, checking your coins every 2 minutes. Your phone can be off.</p>
-    <label class="botrow"><span><b>📲 Phone alerts</b><br><span class="small muted">A notification on this phone when a coin hits 5/5 GO TIME, even with the app closed. No extra app.</span></span><input type="checkbox" ${al ? 'checked' : ''} onchange="toggleAlerts(this.checked)"></label>
+    <label class="botrow"><span><b>📲 Phone alerts</b><br><span class="small muted">A notification on this phone when a Daily Play fires or the bot buys/sells, even with the app closed. 5-minute GO TIME practice alerts too. No extra app.</span></span><input type="checkbox" ${al ? 'checked' : ''} onchange="toggleAlerts(this.checked)"></label>
     ${needHome ? `<div class="botsetup small"><b>One step first:</b> iPhone only sends app alerts to apps on your Home Screen.<ol class="steps"><li>Tap the <b>Share</b> button (square with an arrow) in Safari.</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li><li>Open War Room from the new icon and turn alerts on there.</li></ol></div>` : ''}
     ${al && !BOT.deviceOn && !needHome ? `<div class="botsetup small">Alerts are on for your account, but not on this device yet. <button class="btn sm" onclick="addThisDevice()">Turn on for this device</button></div>` : ''}
     ${al && BOT.deviceOn ? `<div class="row small" style="margin:0 0 6px"><span class="muted">This device gets alerts.</span><button class="btn sm" onclick="testAlert()">Send a test alert</button></div>` : ''}
-    <label class="botrow"><span><b>🤖 Autopilot (paper money only)</b><br><span class="small muted">The bot takes GO TIME setups for you: buys, sets the stop, sells at the target. Turn it off anytime and trade yourself.</span></span><input type="checkbox" ${auto ? 'checked' : ''} onchange="toggleAuto(this.checked)"></label>
+    <label class="botrow"><span><b>🤖 Autopilot (paper money only)</b><br><span class="small muted">The bot takes the proven Daily Plays for you (stocks and crypto): buys, sets a safety stop, sells by the rules. Turn it off anytime and trade yourself.</span></span><input type="checkbox" ${auto ? 'checked' : ''} onchange="toggleAuto(this.checked)"></label>
     ${!CLOUD.conn.paper ? `<p class="small neg" style="margin:4px 0 0">Autopilot needs your Alpaca paper keys saved to your account first: ⚙ → War Room account.</p>` : ''}
     <details class="adv" ${auto ? '' : ''}><summary>Autopilot limits</summary>
-      <div class="fg" style="margin-top:8px"><label class="f">Risk per trade $<input id="botRisk" type="number" min="1" value="${c.risk || S.riskPerTrade || 25}"></label><label class="f">Max bot trades / day<input id="botMax" type="number" min="1" max="20" value="${c.max_trades || 3}"></label><label class="f">Stop for the day if down $<input id="botLoss" type="number" min="1" value="${c.max_daily_loss || S.maxDailyLoss || 100}"></label></div>
+      <div class="fg" style="margin-top:8px"><label class="f">% of account per play<input id="playPct" type="number" min="1" max="25" value="${S.playPct || 10}"></label><label class="f">Max plays open at once<input id="playMax" type="number" min="1" max="10" value="${S.playMax || 6}"></label><label class="f">No new buys if down $ today<input id="botLoss" type="number" min="1" value="${c.max_daily_loss || S.maxDailyLoss || 100}"></label><input id="botRisk" type="hidden" value="${c.risk || 25}"><input id="botMax" type="hidden" value="${c.max_trades || 3}"></div>
       <button class="btn sm" style="margin-top:8px" onclick="saveBotLimits()">Save limits</button>
-      <p class="small muted">The bot only trades crypto on your list, one position per coin, and exits at the stop, at the target (2× risk), or after 4 hours. It never touches live money.</p></details>
-    ${BOT.open.length ? `<div class="small" style="margin-top:10px"><b>Bot is in:</b> ${BOT.open.map(t => `${esc(t.sym.replace('/USD', ''))} (in ${fp(+t.entry)}, stop ${fp(+t.stop)}, target ${fp(+t.target)})`).join(' · ')}</div>` : ''}
+      <p class="small muted">The bot trades the 4 Daily Plays: SPY, QQQ, IWM and DIA for stocks (checked at 3:45pm ET) and the coins on your list for crypto (checked after each daily close). One position per symbol, each with a safety stop held by Alpaca. It never touches live money. 5-minute GO TIME setups are now practice only: the bot no longer trades them.</p></details>
+    ${BOT.open.length ? `<div class="small" style="margin-top:10px"><b>Bot is in:</b> ${BOT.open.map(t => `${esc(t.sym.replace('/USD', ''))} (${esc(t.setup || '')}, in ${fp(+t.entry)}, stop ${fp(+t.stop)}${+t.target > 0 ? `, target ${fp(+t.target)}` : ''})`).join(' · ')}</div>` : ''}
     ${BOT.events.length ? `<div class="botlog">${BOT.events.slice(0, 8).map(e => `<div><span class="muted mono">${botAgo(e.created_at)}</span> ${esc(e.msg || e.kind)}</div>`).join('')}</div>` : `<p class="small muted" style="margin-bottom:0">${al || auto ? 'Watching… Activity shows up here.' : ''}</p>`}
   </div>`;
 }
-async function refreshBot() { try { await loadBot(); BOT.deviceOn = !!(await deviceSub()); } catch (e) { console.warn('bot', e); } renderBot(); renderBotStrip(); }
+async function refreshBot() { try { await loadBot(); BOT.deviceOn = !!(await deviceSub()); } catch (e) { console.warn('bot', e); } renderBot(); renderBotStrip(); renderPlays(); }
 function renderBotStrip() {
   const el = $('#botStrip'); if (!el) return;
   if (!cloudOn() || !BOT.cfg || (!BOT.cfg.autotrade && !BOT.cfg.alerts)) { el.innerHTML = ''; return; }
@@ -867,10 +883,10 @@ async function req(url, opt = {}, auth = true) {
 const api = (p, o = {}) => viaProxy() ? proxyReq('trade', p, o) : req(tradeBase() + p, o);
 const dapi = (p, auth = true) => (auth && viaProxy()) ? proxyReq('data', p, {}) : req(DATA + p, {}, auth);
 
-async function stockBars(syms, tf, start) {
+async function stockBars(syms, tf, start, adj = 'raw') {
   const out = {}; let token = null, g = 0;
   do {
-    const q = new URLSearchParams({ symbols: syms.join(','), timeframe: tf, start, limit: '10000', feed: 'iex', adjustment: 'raw', sort: 'asc' });
+    const q = new URLSearchParams({ symbols: syms.join(','), timeframe: tf, start, limit: '10000', feed: 'iex', adjustment: adj, sort: 'asc' });
     if (token) q.set('page_token', token);
     const j = await dapi('/v2/stocks/bars?' + q);
     for (const [s, a] of Object.entries(j.bars || {})) (out[s] = out[s] || []).push(...a);
@@ -1010,6 +1026,91 @@ function detect(B, VW, E9, E20, AV, Lf, opt) {
 }
 
 
+/* ---------------- Daily Plays engine: the proven daily strategies (shared with the 24/7 bot) ---------------- */
+// Researched Oct 2026 on 2000–2026 stock data and 2014–2026 crypto data, tested on years they were never tuned on.
+const PLAY_STOCKS = ['SPY', 'QQQ', 'IWM', 'DIA'];
+const PLAYS = {
+  stockDip: { key: 'stockDip', market: 'stock', dip: true, name: 'Dip Buy', icon: '🛒', stop: 0.08, maxDays: 10, buyRsi: 10,
+    how: 'An index fund in a long uptrend has a sharp 2–3 day drop. Buy near the close, sell on the bounce (usually 3–5 days).',
+    sell: 'Sells when the bounce comes, after 10 days, or at the safety stop 8% below the buy.',
+    hist: 'Won 73% of trades in 2000–2014 and 76% in 2015–2026.' },
+  stockTrend: { key: 'stockTrend', market: 'stock', dip: false, name: 'Trend Ride', icon: '🏄', stop: 0.15, maxDays: 0, hiN: 55, loN: 20,
+    how: 'An index fund in an uptrend closes at its highest price in 55 days. Buy and ride the trend for weeks.',
+    sell: 'Sells when it closes at a 20-day low, or at the safety stop 15% below the buy.',
+    hist: 'Won about 48% of trades (2000–2026), but the winners were much bigger than the losers.' },
+  cryptoDip: { key: 'cryptoDip', market: 'crypto', dip: true, name: 'Dip Buy', icon: '🛒', stop: 0.20, maxDays: 10, buyRsi: 5,
+    how: 'A coin in an uptrend has a sharp drop while Bitcoin is also in an uptrend. Buy the dip, sell the bounce.',
+    sell: 'Sells when the bounce comes, after 10 days, or at the safety stop 20% below the buy.',
+    hist: 'Won 65–68% of trades (2015–2026), after fees.' },
+  cryptoTrend: { key: 'cryptoTrend', market: 'crypto', dip: false, name: 'Trend Ride', icon: '🏄', stop: 0.25, maxDays: 0, hiN: 55, loN: 20,
+    how: 'A coin closes at its highest price in 55 days while it and Bitcoin are both in uptrends. Ride the wave.',
+    sell: 'Sells when it closes at a 20-day low, or at the safety stop 25% below the buy.',
+    hist: 'Won 40–54% of trades (2015–2026, after fees), with winners several times bigger than losers.' }
+};
+const playLabel = p => (p.market === 'stock' ? 'Stock ' : 'Crypto ') + p.name;
+const playByLabel = l => Object.values(PLAYS).find(p => playLabel(p) === l) || null;
+const PLAY_LABELS = Object.values(PLAYS).map(playLabel);
+const PLAY_FEE = { stock: 0.0005, crypto: 0.003 }; // per side: slippage for stocks, Alpaca fee + slippage for crypto
+// indicator arrays for daily bars (oldest -> newest)
+function playSeries(B) {
+  const c = B.map(b => b.c), n = c.length, s200 = Array(n).fill(null), rsi = Array(n).fill(null), hi = Array(n).fill(null), lo = Array(n).fill(null);
+  let sum = 0, g = 0, l = 0;
+  for (let i = 0; i < n; i++) {
+    sum += c[i]; if (i >= 200) sum -= c[i - 200]; if (i >= 199) s200[i] = sum / 200;
+    if (i > 0) { const d = c[i] - c[i - 1], G = Math.max(d, 0), L = Math.max(-d, 0);
+      if (i <= 2) { g += G / 2; l += L / 2; } else { g = (g + G) / 2; l = (l + L) / 2; }
+      if (i >= 2) rsi[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); }
+    if (i >= 55) { let m = -Infinity; for (let k = i - 55; k < i; k++) m = Math.max(m, c[k]); hi[i] = m; }
+    if (i >= 20) { let m = Infinity; for (let k = i - 20; k < i; k++) m = Math.min(m, c[k]); lo[i] = m; }
+  }
+  return { c, s200, rsi, hi, lo };
+}
+function playReadAt(X, B, i) { if (i < 200 || X.s200[i] == null) return null; return { t: B[i].t, px: X.c[i], s200: X.s200[i], up: X.c[i] > X.s200[i], rsi: X.rsi[i], hi55: X.hi[i], lo20: X.lo[i] }; }
+const playRead = B => (B && B.length > 200) ? playReadAt(playSeries(B), B, B.length - 1) : null;
+function playEntry(p, R, btcUp) {
+  if (!R || !R.up) return false;
+  if (p.market === 'crypto' && !btcUp) return false;
+  return p.dip ? R.rsi < p.buyRsi : R.px > R.hi55;
+}
+function playExit(p, R, daysHeld) {
+  if (!R) return null;
+  if (p.dip) { if (R.rsi > 70) return 'the bounce came'; if (daysHeld >= p.maxDays) return `${p.maxDays} days passed`; return null; }
+  return R.px < R.lo20 ? 'it closed at a 20-day low (trend over)' : null;
+}
+// plain-English "what is it waiting for"
+function playWait(p, R, btcUp) {
+  if (!R) return 'Not enough history yet';
+  if (p.market === 'crypto' && !btcUp) return 'Paused: Bitcoin is in a downtrend';
+  if (!R.up) return 'Downtrend (under its 200-day average), so no buys';
+  if (playEntry(p, R, btcUp)) return 'BUY signal';
+  if (p.dip) return R.rsi < 30 ? `Dipping, almost there (dip meter ${Math.round(R.rsi)}, buys under ${p.buyRsi})` : `Waiting for a sharp drop (dip meter ${Math.round(R.rsi)}, buys under ${p.buyRsi})`;
+  return `Waiting for a new 55-day high (${((R.hi55 / R.px - 1) * 100).toFixed(1)}% away)`;
+}
+// honest replay of a play on real bars: stocks buy at the signal close, crypto at the next open; fees included
+function playTest(B, p, btcUpAt) {
+  if (!B || B.length < 260) return null;
+  const X = playSeries(B), fee = PLAY_FEE[p.market], T = []; let pos = null;
+  for (let i = 200; i < B.length - 1; i++) {
+    if (pos) {
+      const stopPx = pos.px * (1 - p.stop);
+      if (i > pos.i && B[i].l <= stopPx) { const x = Math.min(B[i].o, stopPx); T.push(x * (1 - fee) / (pos.px * (1 + fee)) - 1); pos = null; continue; }
+      if (i > pos.si && playExit(p, playReadAt(X, B, i), i - pos.si)) { const x = p.market === 'stock' ? B[i].c : B[i + 1].o; T.push(x * (1 - fee) / (pos.px * (1 + fee)) - 1); pos = null; }
+    } else if (playEntry(p, playReadAt(X, B, i), btcUpAt ? btcUpAt(B[i].t) : true)) {
+      pos = p.market === 'stock' ? { px: B[i].c, i, si: i } : { px: B[i + 1].o, i: i + 1, si: i };
+    }
+  }
+  if (!T.length) return { n: 0 };
+  const w = T.filter(r => r > 0).length, gw = T.filter(r => r > 0).reduce((a, r) => a + r, 0), gl = -T.filter(r => r <= 0).reduce((a, r) => a + r, 0);
+  return { n: T.length, win: w / T.length, avg: T.reduce((a, r) => a + r, 0) / T.length, pf: gl ? gw / gl : 99, from: B[200].t };
+}
+// merge today's live daily bar (stocks) into history
+function withToday(B, today) {
+  if (!today) return B; const day = t => new Date(t * 1000).toISOString().slice(0, 10);
+  const out = B.slice(); if (out.length && day(out[out.length - 1].t) === day(today.t)) out[out.length - 1] = today; else out.push(today); return out;
+}
+// crypto: only finished days count (a daily bar is done 24h after it starts)
+const doneBars = (B, nowSec) => (B || []).filter(b => b.t + 86400 <= nowSec);
+
 /* ---------------- Strategy Lab: what actually made money lately (5/5 trades only, after fees) ---------------- */
 const CRYPTO_FEE = 0.0025; // Alpaca crypto taker fee per side
 const EDGE_MIN_N = 15, EDGE_MIN_R = 0.05, LAB_DAYS = 30;
@@ -1070,6 +1171,83 @@ function renderLab() {
     <button class="btn sm" style="margin-top:8px" onclick="runLab(true)">Re-test now</button>`;
 }
 
+/* ---------------- Daily Plays: UI (the proven strategies, explained like you're new) ---------------- */
+const PD = { crypto: {}, stock: {}, btcUp: null, at: 0, loading: false, tests: null, err: null };
+async function loadPlays() {
+  if (PD.loading) return; PD.loading = true; PD.err = null;
+  try {
+    const now = Date.now() / 1000, coins = uniq(['BTC/USD', ...S.crypto]);
+    const cb = await cryptoBars(coins, '1Day', isoAgo(2300));
+    for (const s of coins) PD.crypto[s] = doneBars((cb[s] || []).map(pb), now);
+    const bR = playRead(PD.crypto['BTC/USD']); PD.btcUp = !!(bR && bR.up);
+    if (hasKeys()) {
+      const sb = await stockBars(PLAY_STOCKS, '1Day', '2015-01-01T00:00:00Z', 'all');
+      let snap = {}; try { snap = await dapi('/v2/stocks/snapshots?symbols=' + PLAY_STOCKS.join(',') + '&feed=iex'); snap = snap.snapshots || snap; } catch (e) {}
+      for (const s of PLAY_STOCKS) {
+        const sn = snap && snap[s], today = sn && sn.dailyBar ? { ...pb(sn.dailyBar), c: sn.latestTrade ? +sn.latestTrade.p : +sn.dailyBar.c } : null;
+        PD.stock[s] = withToday((sb[s] || []).map(pb), today);
+      }
+    }
+    // re-check every play on the real Alpaca history (honest replay, fees included)
+    const bX = PD.crypto['BTC/USD'] && PD.crypto['BTC/USD'].length > 200 ? playSeries(PD.crypto['BTC/USD']) : null;
+    const bMap = new Map(); if (bX) PD.crypto['BTC/USD'].forEach((b, i) => { if (bX.s200[i] != null) bMap.set(b.t, b.c > bX.s200[i]); });
+    PD.tests = {};
+    for (const p of Object.values(PLAYS)) {
+      const src = p.market === 'stock' ? PD.stock : PD.crypto; let n = 0, w = 0, sum = 0, from = null;
+      for (const B of Object.values(src)) { const r = playTest(B, p, p.market === 'crypto' ? t => bMap.get(t) : null); if (!r || !r.n) continue; n += r.n; w += r.win * r.n; sum += r.avg * r.n; from = from ? Math.min(from, r.from) : r.from; }
+      PD.tests[p.key] = n ? { n, win: w / n, avg: sum / n, from } : null;
+    }
+    PD.at = Date.now();
+  } catch (e) { PD.err = e.message; console.warn('plays', e); }
+  PD.loading = false; renderPlays();
+}
+function playSignals() {
+  const out = [];
+  for (const p of Object.values(PLAYS)) {
+    const src = p.market === 'stock' ? PD.stock : PD.crypto, list = p.market === 'stock' ? PLAY_STOCKS : S.crypto;
+    for (const s of list) { const R = playRead(src[s]); if (playEntry(p, R, PD.btcUp)) out.push({ p, s, R }); }
+  }
+  return out;
+}
+function playHeld(sym) { return (BOT.open || []).find(t => t.sym === sym && PLAY_LABELS.includes(t.setup)); }
+function playRow(s, market, R) {
+  const plays = Object.values(PLAYS).filter(p => p.market === market), held = playHeld(s);
+  const name = s.replace('/USD', ''), px = R ? fp(R.px) : '—';
+  let body;
+  if (held) {
+    const p = playByLabel(held.setup), pl = R ? (R.px / +held.entry - 1) * 100 : null;
+    body = `<div class="pp"><span class="tag long">🤖 Bot holding</span> ${p.icon} ${p.name} · bought ${fp(+held.entry)}${pl != null ? ` · <b class="${cls(pl)}">${pl >= 0 ? '+' : ''}${pl.toFixed(1)}%</b>` : ''}<div class="small muted">${esc(p.sell)}</div></div>`;
+  } else if (!R || !R.up || (market === 'crypto' && !PD.btcUp)) body = `<div class="pp muted">${esc(playWait(plays[0], R, PD.btcUp))}</div>`;
+  else body = plays.map(p => { const w = playWait(p, R, PD.btcUp), buy = w === 'BUY signal';
+    return `<div class="pp">${p.icon} <b>${p.name}:</b> ${buy ? `<span class="tag long">🟢 BUY signal</span>` : `<span class="muted">${esc(w)}</span>`}</div>`; }).join('');
+  return `<div class="playrow"><div class="ps"><b>${esc(name)}</b><span class="mono">${px}</span>${R ? `<span class="small ${R.up ? 'pos' : 'neg'}">${R.up ? '▲ uptrend' : '▼ downtrend'}</span>` : ''}</div>${body}</div>`;
+}
+function renderPlays() {
+  const el = $('#plays'); if (!el) return;
+  if (!PD.at) { el.innerHTML = `<p class="small muted">${PD.loading ? 'Loading years of daily prices…' : PD.err ? 'Could not load daily prices: ' + esc(PD.err) : 'Loading…'}</p>`; return; }
+  const sig = playSignals(), auto = !!(BOT.cfg && BOT.cfg.autotrade);
+  const pct = S.playPct || 10;
+  const head = sig.length
+    ? `<div class="verdict on"><div class="sub">Right now</div><div class="big">${sig.length} buy signal${sig.length > 1 ? 's' : ''}</div><div class="small" style="margin-top:4px">${sig.map(x => `${x.p.icon} ${x.p.name} on <b>${esc(x.s.replace('/USD', ''))}</b>`).join(' · ')}. ${auto ? 'Autopilot takes these (paper) at the next check.' : 'Turn on Autopilot (⚙) to have the bot take these for you on paper.'}</div></div>`
+    : `<div class="verdict mix"><div class="sub">Right now</div><div class="big">Nothing to buy · that's normal</div><div class="small" style="margin-top:4px">These plays only fire a few times a month. Waiting is part of the edge: no signal means no trade.</div></div>`;
+  const stockRows = hasKeys() ? PLAY_STOCKS.map(s => playRow(s, 'stock', playRead(PD.stock[s]))).join('') : `<p class="small muted">Sign in and save your Alpaca keys to see the stock plays.</p>`;
+  const cryptoRows = S.crypto.map(s => playRow(s, 'crypto', playRead(PD.crypto[s]))).join('');
+  const tl = p => { const t = PD.tests && PD.tests[p.key]; return t ? `Re-checked on Alpaca's data since ${new Date(t.from * 1000).getFullYear()}: ${t.n} trades, won ${Math.round(t.win * 100)}%, average ${t.avg >= 0 ? '+' : ''}${(t.avg * 100).toFixed(1)}% per trade${p.market === 'crypto' ? ' after fees' : ''}.` : 'Not enough data on this account yet to re-check it.'; };
+  const how = Object.values(PLAYS).map(p => `<div class="playhow"><b>${p.icon} ${p.market === 'stock' ? 'Stock' : 'Crypto'} ${p.name}</b><div>${esc(p.how)}</div><div class="muted">${esc(p.sell)}</div><div>📜 ${esc(p.hist)}</div><div class="muted">🔁 ${tl(p)}</div></div>`).join('');
+  el.innerHTML = `${head}
+    <div class="playgrid">
+      <div><div class="sub" style="margin-bottom:6px;white-space:normal">📈 Stocks · index funds · checked 3:45pm ET</div>${stockRows}</div>
+      <div><div class="sub" style="margin-bottom:6px;white-space:normal">🪙 Crypto · checked after each daily close (8pm ET)${PD.btcUp === false ? ' · <span class="neg">paused, Bitcoin downtrend</span>' : ''}</div>${cryptoRows}</div>
+    </div>
+    <p class="small muted" style="margin:8px 0 0">${auto ? `🤖 Autopilot is ON: it takes these plays on paper, putting ${pct}% of your account in each (max ${S.playMax || 6} at once), each with a safety stop.` : '🤖 Autopilot is off. Turn it on in ⚙ and the bot takes these plays for you on paper.'}</p>
+    <details class="adv" style="margin-top:8px"><summary>How these 4 plays work + their track record</summary>
+      <p class="small">These replaced the 5-minute GO TIME setups for Autopilot, because those lost money after fees. Every play below was tested on 10–25 years of real prices and kept making money on years it was never tuned on. No strategy wins every trade: the dip plays win about 2 out of 3, the trend plays about 1 out of 2 but with bigger wins.</p>
+      <p class="small"><b>Dip meter</b> = how hard the price fell over the last 2–3 days (0 = straight down, 100 = straight up). Buying a sharp dip in an uptrend, then selling the bounce, is the oldest edge in the book.</p>
+      ${how}
+      <p class="small muted">Past results don't promise future ones. Educational tool, not financial advice. Autopilot is paper money only.</p>
+    </details>`;
+}
+
 /* market context maps: t -> {above, up} */
 function ctxMap(A) { const m = new Map(); if (!A) return m; A.bars.forEach((b, i) => { if (A.vw[i] != null) m.set(b.t, { above: b.c > A.vw[i], up: A.e9[i] > A.e20[i] }); }); return m; }
 function alignFrom(map) {
@@ -1098,8 +1276,12 @@ function baseStock(sym, raw) {
   };
   const L = dayLevels(sessDate);
   const sessIx = byDay.get(sessDate) || [];
+  // opening relative volume: today's first 5-min candle vs the same candle on prior days (the "stocks in play" filter pros use)
+  const firstV = d => { const ix = byDay.get(d); return ix && ix.length && et(rth[ix[0]].t).min === 570 ? rth[ix[0]].v : null; };
+  const prevFirst = dates.filter(d => d < sessDate).slice(-14).map(firstV).filter(v => v > 0);
+  const orv = firstV(sessDate) && prevFirst.length >= 3 ? firstV(sessDate) / (prevFirst.reduce((a, v) => a + v, 0) / prevFirst.length) : null;
   const li = rth.length - 1;
-  return { sym, crypto: false, all, bars: rth, e9, e20, av, vw, byDay, dates, dayLevels, sessDate, L, last: lastAll.c, lastT: lastAll.t,
+  return { sym, crypto: false, all, bars: rth, e9, e20, av, vw, byDay, dates, dayLevels, sessDate, L, orv, last: lastAll.c, lastT: lastAll.t,
     vwNow: sessIx.length ? vw[sessIx[sessIx.length - 1]] : null, e9Now: e9[li], e20Now: e20[li],
     chg: L.PDC ? (lastAll.c - L.PDC) / L.PDC : null, sessionLive: todayHasRth && lastDate === et(nowS()).date && marketOpen() };
 }
@@ -1207,7 +1389,7 @@ async function scan() {
     for (const [s, A] of Object.entries(cA)) { ST.an[s] = A; setups.push(...detectCrypto(A, s === 'BTC/USD' ? ethMap : btcMap)); }
     if (hasKeys()) {
       const syms = uniq(['SPY', 'QQQ', 'IWM', ...S.watch, ...ST.inPlay.map(p => p.symbol)]);
-      const sb = await stockBars(syms, '5Min', isoAgo(7));
+      const sb = await stockBars(syms, '5Min', isoAgo(21));
       const sA = {};
       for (const s of syms) { const A = baseStock(s, sb[s] || []); if (A) { sA[s] = A; ST.an[s] = A; } }
       const spyMap = ctxMap(sA.SPY), qqqMap = ctxMap(sA.QQQ);
@@ -1366,7 +1548,8 @@ function renderDock() {
   $('#cryptoPlans').innerHTML = S.crypto.map(s => planCard(s)).join('') || `<div class="empty">Loading crypto…</div>`;
   if (!hasKeys()) { $('#stockPlans').innerHTML = `<div class="empty">Add your Alpaca keys to see today's movers with a game plan for each.</div>`; $('#inplayNote').textContent = ''; }
   else {
-    const list = uniq([...ST.inPlay.map(p => p.symbol), ...S.watch.filter(s => !['SPY', 'QQQ'].includes(s))]);
+    const rv = s => (ST.an[s] && ST.an[s].orv) || 0;
+    const list = uniq([...ST.inPlay.map(p => p.symbol), ...S.watch.filter(s => !['SPY', 'QQQ'].includes(s))]).sort((a, b) => rv(b) - rv(a)); // most "in play" first
     $('#stockPlans').innerHTML = list.map(s => planCard(s, ST.inPlay.find(p => p.symbol === s))).join('') || `<div class="empty">Scanning…</div>`;
     $('#inplayNote').textContent = stockOpen ? 'live' : 'plans from last session';
   }
@@ -1378,7 +1561,7 @@ function planCard(s, ip) {
   const g = gamePlan(A); const n = ST.news[s];
   const act = ST.setups.filter(x => x.sym === s && x.active).length;
   return `<div class="plan">
-    <div class="hd"><span class="sym">${s.replace('/USD', '')}</span>${ip ? `<span class="tag">${esc(ip.why)}</span>` : ''}${act ? `<span class="tag live">${act} live</span>` : ''}
+    <div class="hd"><span class="sym">${s.replace('/USD', '')}</span>${ip ? `<span class="tag">${esc(ip.why)}</span>` : ''}${A.orv >= 2 ? `<span class="tag A" title="Opening 5-minute volume vs its normal opening">🔥 ${A.orv.toFixed(1)}× volume</span>` : ''}${act ? `<span class="tag live">${act} live</span>` : ''}
       <span class="px">${fp(A.last)} <span class="${cls(A.chg)} small">${fpct(A.chg)}</span></span></div>
     <div class="bias ${g.bc}">${g.bias}</div>
     <ul>${g.lines.map(l => `<li>${l}</li>`).join('')}</ul>
@@ -2346,6 +2529,7 @@ async function boot() {
   await loadInPlay();
   await scan();
   runLab(false);
+  loadPlays();
   loadFills();
   if (!CH.bars.length || CH.sym) loadChart(true);
   const vis = () => !document.hidden;
@@ -2356,6 +2540,7 @@ async function boot() {
   timers.push(setInterval(() => vis() && loadInPlay(), 300000));
   timers.push(setInterval(renderSession, 30000));
   timers.push(setInterval(() => vis() && refreshBot(), 60000));
+  timers.push(setInterval(() => vis() && loadPlays(), 600000));
 }
 function init() {
   $$('#nav button').forEach(b => b.onclick = () => go(b.dataset.v));
